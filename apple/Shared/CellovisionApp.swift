@@ -2,7 +2,16 @@ import SwiftUI
 
 @main
 struct CellovisionApp: App {
-    @State private var state = AppState()
+    @State private var state: AppState
+
+    init() {
+        let state = AppState()
+        _state = State(initialValue: state)
+        #if os(iOS)
+        // Cindy (the user's assistant) inside Cellovision on the iPhone: off until switched on in Settings
+        CindyActions.install(state)
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {

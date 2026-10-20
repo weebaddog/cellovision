@@ -154,6 +154,7 @@ struct SettingsView: View {
                 Button("Sign it in") { Task { await approve() } }.disabled(code.count < 6)
                 if !message.isEmpty { Text(message).font(.footnote) }
             }
+            CindySettingsSection()
             #endif
             Section {
                 Button("Switch profile / sign out") { Task { await state.signOut() } }

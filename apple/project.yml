@@ -10,7 +10,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.2.0"
+    MARKETING_VERSION: "0.3.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -37,9 +37,12 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
+        # Cindy (Settings > Cindy): talking to her, scanning the PC's pairing code
+        NSMicrophoneUsageDescription: Talk to Cindy, your assistant on your PC, when you tap her mic.
+        NSCameraUsageDescription: Scan the pairing code Cindy shows on your PC.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        NSLocalNetworkUsageDescription: Cellovision looks for your Cellovision server on this Wi-Fi.
+        NSLocalNetworkUsageDescription: Cellovision looks for your Cellovision server on this Wi-Fi, and reaches Cindy on your PC.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
