@@ -39,6 +39,7 @@ export function parseEpisode(file, folder = "") {
   const base = file.replace(/\.[a-z0-9]{2,4}$/i, "");
   let m = base.match(/[Ss](\d{1,3})[\s._-]*[Ee](\d{1,4})(?:[\s._-]*[Ee-](\d{1,4}))?/);
   if (!m) m = base.match(/\b(\d{1,2})[xX](\d{1,3})(?:[xX-](\d{1,3}))?\b/);
+  if (!m && !seasonOf(folder)) m = base.match(EPISODE_3); // "Show - 101 - Title" (season 1, episode 01)
   let season, episode, episodeEnd;
   if (m) { season = +m[1]; episode = +m[2]; episodeEnd = m[3] ? +m[3] : null; }
   else {
@@ -48,8 +49,19 @@ export function parseEpisode(file, folder = "") {
     season = fs; episode = +e[1]; episodeEnd = null;
   }
   const after = m ? base.slice(base.indexOf(m[0]) + m[0].length) : "";
-  const title = tidy(after.replace(/^[\s._-]+/, "")).replace(JUNK, "").replace(/^-\s*/, "").trim() || null;
+  const title = tidy(after.replace(/^[\s._-]+/, "")).replace(JUNK, "").replace(/^-\s*/, "").replace(/[\s([-]+$/, "").trim() || null;
   return { season, episode, episodeEnd, title };
+}
+
+const EPISODE_3 = /(?<=^|\s-\s)([1-9])(\d{2})(?=\s-\s|$)/;
+
+/** The show's name at the front of an episode file's name ("The Show - S01E02 - Title" → "The Show"), or null. */
+export function showNameOf(file) {
+  const base = file.replace(/\.[a-z0-9]{2,4}$/i, "");
+  const m = base.match(/[Ss]\d{1,3}[\s._-]*[Ee]\d{1,4}/) || base.match(/\b\d{1,2}[xX]\d{1,3}\b/) || base.match(EPISODE_3);
+  if (!m || m.index === 0) return null;
+  const name = tidy(base.slice(0, m.index)).replace(/[\s-]+$/, "").trim();
+  return name || null;
 }
 
 /** "Season 2", "S02", "Series 2", "Specials" → 2 / 0; anything else → null. */

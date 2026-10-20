@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { VIDEO, AUDIO, PHOTO, SUBS, ext, parseMovie, parseEpisode, parseShow, seasonOf, sortTitle, subtitleInfo, tidy } from "./names.js";
+import { VIDEO, AUDIO, PHOTO, SUBS, ext, parseMovie, parseEpisode, parseShow, seasonOf, showNameOf, sortTitle, subtitleInfo, tidy } from "./names.js";
 import { probe } from "./probe.js";
 import { nfoFor, localArt, ageOf } from "./meta.js";
 
@@ -106,17 +106,38 @@ export function createScanner({ db, artDir, tmdb = () => null, log = console.log
     db.run("INSERT OR IGNORE INTO set_items (set_id, item_id, pos) VALUES (?, ?, ?)", setId, itemId, pos);
   }
 
+  // A show's bonus-material folder: its episodes go with Specials.
+  const EXTRAS = /^(featurettes?|extras?|bonus( features)?|behind the scenes|deleted scenes)$/i;
+
   async function scanShows(shelf, files, scan, tick, roots) {
     const tm = tmdb();
     const videos = files.filter((f) => VIDEO.has(ext(f)));
-    // The show folder: the first folder under the shelf's root.
-    const showDirOf = (f) => { const root = roots.find((r) => f.startsWith(r + path.sep)); const rel = path.relative(root, f).split(path.sep); return rel.length > 1 ? path.join(root, rel[0]) : null; };
-    const shows = new Map();
-    for (const f of videos) { const d = showDirOf(f); if (d) (shows.get(d) || shows.set(d, []).get(d)).push(f); }
-    for (const [dir, eps] of shows) {
-      const showId = idOf(`${shelf.id}:${dir}`);
-      const named = parseShow(path.basename(dir));
-      const nfo = fromNfo(nfoFor(dir, "show")), art = localArt(dir, "show");
+    // The show: the first folder under the shelf's root. Episodes lying straight in a root are
+    // either that folder's own show (the shelf points at the show) or, when their names say
+    // different shows ("Name - S01E02…"), one show per name.
+    const shows = new Map(); // key → { dir, title, eps }
+    const add = (key, dir, title, f) => (shows.get(key) || shows.set(key, { dir, title, eps: [] }).get(key)).eps.push(f);
+    const loose = new Map();
+    for (const f of videos) {
+      const root = roots.find((r) => f.startsWith(r + path.sep));
+      if (!root) continue;
+      const rel = path.relative(root, f).split(path.sep);
+      if (rel.length > 1 && (seasonOf(rel[0]) !== null || EXTRAS.test(rel[0]))) add(root, root, null, f); // (the shelf points at one show's folder)
+      else if (rel.length > 1) { const d = path.join(root, rel[0]); add(d, d, null, f); }
+      else (loose.get(root) || loose.set(root, []).get(root)).push(f);
+    }
+    for (const [root, files] of loose) {
+      const byName = new Map();
+      for (const f of files) { const n = showNameOf(path.basename(f)); const k = n ? sortTitle(n) : ""; (byName.get(k) || byName.set(k, { title: n, files: [] }).get(k)).files.push(f); }
+      const named = [...byName.keys()].filter(Boolean);
+      if (named.length <= 1) for (const f of files) add(root, root, named.length ? byName.get(named[0]).title : null, f);
+      else for (const [k, g] of byName) for (const f of g.files) add(k ? `${root}#${k}` : root, root, k ? g.title : null, f);
+    }
+    for (const [key, { dir, title, eps }] of shows) {
+      const showId = idOf(`${shelf.id}:${key}`);
+      const ownDir = key === dir; // (a real folder for this show: its .nfo and pictures)
+      const named = parseShow(title || path.basename(dir));
+      const nfo = ownDir ? fromNfo(nfoFor(dir, "show")) : {}, art = ownDir ? localArt(dir, "show") : {};
       const old = existing(showId);
       let details = {};
       if (tm && (!old?.tmdb_id || !old?.overview)) { try { details = (await tm.show({ ...named, tmdb_id: nfo.tmdb_id }, showId)) || {}; } catch (e) { log(`[details] ${named.title}: ${e.message}`); } }
@@ -127,7 +148,7 @@ export function createScanner({ db, artDir, tmdb = () => null, log = console.log
       await pool(eps, 4, async (file) => {
         const st = fs.statSync(file);
         const p = parseEpisode(path.basename(file), path.basename(path.dirname(file)));
-        const seasonNo = p?.season ?? seasonOf(path.basename(path.dirname(file))) ?? 1;
+        const seasonNo = p?.season ?? seasonOf(path.basename(path.dirname(file))) ?? (EXTRAS.test(path.basename(path.dirname(file))) ? 0 : 1);
         const seasonId = idOf(`${showId}:season:${seasonNo}`);
         if (!seasons.has(seasonNo)) {
           seasons.set(seasonNo, seasonId);

@@ -7,7 +7,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { createServer } from "../src/main.js";
 import { FF, run, probe } from "../src/probe.js";
-import { parseMovie, parseEpisode, seasonOf } from "../src/names.js";
+import { parseMovie, parseEpisode, seasonOf, showNameOf } from "../src/names.js";
 import { decide } from "../src/stream.js";
 import { ageOf } from "../src/meta.js";
 
@@ -34,6 +34,12 @@ await test("episode names", () => {
   assert.equal(parseEpisode("03 - Something.mkv", "Season 1").episode, 3);
   assert.equal(seasonOf("Specials"), 0);
   assert.equal(seasonOf("Extras"), null);
+  assert.deepEqual(parseEpisode("Home Improvement - 203 - Title.avi"), { season: 2, episode: 3, episodeEnd: null, title: "Title" });
+  assert.equal(parseEpisode("Darkwing Duck - S01 E04 - In Like Blunt (480p - DNSP Web-DL).mp4").title, "In Like Blunt");
+  // Episodes lying straight in a folder of many shows: the show's name from the file name.
+  assert.equal(showNameOf("Sanford and Son - 5x04 - The Sanford Arms.avi"), "Sanford and Son");
+  assert.equal(showNameOf("Cobra.Kai.S01E01.mkv"), "Cobra Kai");
+  assert.equal(showNameOf("S01E01.m4v"), null);
 });
 await test("age labels", () => {
   assert.equal(ageOf("R"), 17); assert.equal(ageOf("TV-MA"), 17); assert.equal(ageOf("PG-13"), 13); assert.equal(ageOf("G"), 0); assert.equal(ageOf("FSK 12"), 12); assert.equal(ageOf(null), null);
