@@ -49,6 +49,13 @@ h2 { font-size: 1.2rem; }
 .hidden { display: none !important; }
 :focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; border-radius: 6px; }
 
+/* ---- TV (remote control) ---- */
+.tv :focus { outline: 4px solid #fff; outline-offset: 3px; border-radius: 10px; }
+.tv .card:focus { outline: none; }
+.tv .card:focus .art { transform: scale(1.08); box-shadow: 0 0 0 4px #fff, 0 14px 30px rgba(0,0,0,.6); }
+.tv .card:focus .t { color: #fff; }
+.tv main { padding-left: 48px; padding-right: 48px; }
+
 /* ---- top bar ---- */
 .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; padding: 10px 24px; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.15rem; letter-spacing: .01em; }

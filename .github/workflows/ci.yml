@@ -18,6 +18,21 @@ jobs:
         working-directory: server
         run: node test/selftest.js
 
+  android:
+    # The Android app (phones and Android TV) builds; release signing happens on the owner's PC.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: android-actions/setup-android@v3
+      - name: Build
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -q
+          ls -la app/build/outputs/apk/debug
+
   desktop-linux:
     # The Linux app: AppImage (any distro) and .deb (Debian/Ubuntu/Mint), with the server inside.
     runs-on: ubuntu-24.04

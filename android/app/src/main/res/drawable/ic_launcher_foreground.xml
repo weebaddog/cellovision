@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The ring and play mark from web/icon.svg, centred in the 108dp adaptive-icon canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="22" android:translateY="22">
+        <path
+            android:strokeColor="#59FFFFFF"
+            android:strokeWidth="3"
+            android:fillColor="#00000000"
+            android:pathData="M32,13 A19,19 0 1,1 31.99,13 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M27,21.5 L44,32 L27,42.5 Z" />
+    </group>
+</vector>

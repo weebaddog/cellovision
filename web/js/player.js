@@ -10,6 +10,8 @@ const MODE_LABEL = { direct: "Direct", remux: "Repackaged", convert: "Converted"
  * Plays an item full screen. opts: { start: seconds (null = resume where left off), queue: [ids] }.
  */
 export async function playVideo(id, opts = {}) {
+  // Inside the Android app: its own player plays it (more formats, TV remotes, picture-in-picture).
+  if (window.CellovisionApp?.play) { music.pause(); window.CellovisionApp.play(id, opts.start ?? -1, (opts.queue || []).join(",")); return; }
   document.querySelector(".player")?.remove();
   music.pause();
   const item = await api("GET", `/api/item?id=${encodeURIComponent(id)}`);

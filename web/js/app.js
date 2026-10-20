@@ -4,9 +4,11 @@
 import { h, api, state, toast, go, applyTheme, setTheme, localGet, act, sheet } from "./core.js";
 import { homePage, shelfPage, itemPage, searchPage, heartsPage, setsPage, setPage, mixtapesPage, mixtapePage, pairPage } from "./pages.js";
 import { controlPage } from "./control.js";
+import { enableTv } from "./tv.js";
 
 const app = document.getElementById("app");
 applyTheme();
+try { if (window.CellovisionApp?.isTV?.() || new URLSearchParams(location.search).get("tv") === "1") enableTv(); } catch { /* not a TV */ }
 
 async function start() {
   try { state.server = await api("GET", "/api/hello"); }
@@ -118,6 +120,7 @@ function toggleMenu() {
     h("div", { style: { padding: "8px 12px" } }, h("strong", {}, state.me.name), h("div", { class: "muted small" }, state.server.name)), h("hr"),
     h("a", { href: "#/pair", onclick: () => m.remove() }, "📺 Pair Code (sign in a TV)"),
     h("button", { onclick: () => { m.remove(); devicesSheet(); } }, "💻 My devices"),
+    window.CellovisionApp?.changeServer ? h("button", { onclick: () => { m.remove(); window.CellovisionApp.changeServer(); } }, "🔁 Change server") : null,
     h("hr"),
     h("div", { class: "small muted", style: { padding: "4px 12px" } }, "Theme"),
     h("div", { class: "chips", style: { padding: "4px 10px 8px" } }, [["dark", "Dark"], ["light", "Light"], ["auto", "Auto"]].map(([k, l]) => h("button", { class: `chip${theme === k ? " on" : ""}`, onclick: () => { setTheme(k); m.remove(); } }, l))),
