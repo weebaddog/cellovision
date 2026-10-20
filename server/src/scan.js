@@ -129,8 +129,10 @@ export function createScanner({ db, artDir, tmdb = () => null, log = console.log
     for (const [root, files] of loose) {
       const byName = new Map();
       for (const f of files) { const n = showNameOf(path.basename(f)); const k = n ? sortTitle(n) : ""; (byName.get(k) || byName.set(k, { title: n, files: [] }).get(k)).files.push(f); }
-      const named = [...byName.keys()].filter(Boolean);
-      if (named.length <= 1) for (const f of files) add(root, root, named.length ? byName.get(named[0]).title : null, f);
+      const named = [...byName.keys()].filter(Boolean).sort((a, b) => byName.get(b).files.length - byName.get(a).files.length);
+      const count = (k) => byName.get(k).files.length, total = named.reduce((n, k) => n + count(k), 0);
+      // One show (a few files spelled differently don't make another): most of the names agree.
+      if (named.length <= 1 || count(named[0]) >= 0.6 * total) for (const f of files) add(root, root, named.length ? byName.get(named[0]).title : null, f);
       else for (const [k, g] of byName) for (const f of g.files) add(k ? `${root}#${k}` : root, root, k ? g.title : null, f);
     }
     for (const [key, { dir, title, eps }] of shows) {
