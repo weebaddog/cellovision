@@ -55,5 +55,5 @@ if (fresh) {
   void id;
 }
 await srv.scanner.scan();
-await srv.listen(Number(process.env.CELLOVISION_PORT || 8421));
+await srv.listen(Number(process.env.CELLOVISION_PORT || 8421), "0.0.0.0", 8444);
 console.log("Demo: http://localhost:8421  (Demo / demo-pass, or Kid)");

@@ -187,6 +187,11 @@ function settingsBlock(c) {
   const enc = h("select", {}, [["auto", "Automatic (graphics chip if it works)"], ["h264_amf", "AMD graphics (AMF)"], ["h264_nvenc", "NVIDIA graphics (NVENC)"], ["h264_qsv", "Intel graphics (Quick Sync)"], ["libx264", "Processor only (x264)"]]
     .map(([v, l]) => h("option", { value: v, selected: c.settings.encoder === v }, l)));
   const every = h("select", {}, [[0, "Never (only when I press Rescan)"], [1, "Every hour"], [6, "Every 6 hours"], [12, "Every 12 hours"], [24, "Once a day"]].map(([v, l]) => h("option", { value: String(v), selected: c.settings.scanEvery === v }, l)));
+  const plain = h("input", { type: "checkbox", checked: c.settings.plainHttp !== false });
+  const secure = c.https ? h("div", { class: "field" }, h("span", {}, "Secure connection"),
+    h("div", { class: "muted small" }, `The Windows, Linux and Android apps connect over HTTPS (port ${c.https.port}) with this server's own certificate. The first time, they show its fingerprint: it should match this one.`),
+    h("code", { style: { display: "block", wordBreak: "break-all", margin: "6px 0" } }, c.https.fingerprint),
+    h("label", { style: { display: "flex", gap: "8px", alignItems: "center" } }, plain, h("span", {}, "Also allow plain HTTP (needed by the iPhone and Apple TV apps, and older apps)"))) : null;
   return h("section", { class: "row" }, h("h2", {}, "Settings"),
     h("div", { class: "panel" },
       h("label", { class: "field" }, h("span", {}, "Server name"), serverName),
@@ -194,8 +199,11 @@ function settingsBlock(c) {
         h("div", { class: "muted small", style: { marginTop: "4px" } }, "Plots, posters and age ratings for films and shows. Free: make an account at themoviedb.org → Settings → API. Without it, Cellovision uses the .nfo files and pictures next to your media.")),
       h("label", { class: "field" }, h("span", {}, "Fit to Device: convert video with"), enc),
       h("label", { class: "field" }, h("span", {}, "Look for new files"), every),
+      secure,
       h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => act(async () => {
-        await api("PUT", "/api/control/settings", { serverName: serverName.value, encoder: enc.value, scanEvery: +every.value, ...(tmdb.value ? { tmdbKey: tmdb.value } : {}) });
+        await api("PUT", "/api/control/settings", { serverName: serverName.value, encoder: enc.value, scanEvery: +every.value, plainHttp: plain.checked, ...(tmdb.value ? { tmdbKey: tmdb.value } : {}) });
+        // Plain HTTP just turned off while on it: carry on over HTTPS.
+        if (!plain.checked && c.https && location.protocol === "http:") { location.href = `https://${location.hostname}:${c.https.port}/#/control`; return; }
         go("#/control");
       }, "Settings saved") }, "Save settings"),
         c.settings.tmdbKey ? h("button", { class: "btn", onclick: () => act(async () => { await api("PUT", "/api/control/settings", { tmdbKey: "" }); go("#/control"); }, "TMDB key removed") }, "Remove TMDB key") : null)));

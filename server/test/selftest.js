@@ -79,7 +79,8 @@ console.log("server");
 const dataDir = path.join(tmp, "data");
 const srv = await createServer({ dataDir, log: () => {}, fetchImpl: async () => { throw new Error("offline"); } });
 const PORT = 18420;
-await srv.listen(PORT, "127.0.0.1");
+const TLS_PORT = 18443;
+await srv.listen(PORT, "127.0.0.1", TLS_PORT);
 const base = `http://127.0.0.1:${PORT}`;
 let token = null;
 const call = async (method, p, body, tok = token, extra = {}) => {
@@ -302,6 +303,32 @@ await test("a file that disappears is marked missing, not deleted", async () => 
   assert.equal(srv.db.get("SELECT missing FROM items WHERE id = ?", ids["Toy Story"]).missing, 1);
   assert.equal(srv.db.get("SELECT position FROM marks WHERE item_id = ?", ids["Toy Story"]).position, 40); // (Keep Watching kept)
 });
+await test("HTTPS: the server's own certificate, its fingerprint in hello, Secure cookies, plain HTTP can be switched off", async () => {
+  const https = await import("node:https");
+  const crypto = await import("node:crypto");
+  const hello = (await call("GET", "/api/hello", null, null)).body;
+  assert.equal(hello.https.port, TLS_PORT); assert.match(hello.https.fingerprint, /^sha256\/[A-Za-z0-9+/=]{44}$/);
+  const get = (p, headers = {}) => new Promise((ok, bad) => {
+    const r = https.request({ host: "127.0.0.1", port: TLS_PORT, path: p, method: headers.body ? "POST" : "GET", rejectUnauthorized: false, headers: { "content-type": "application/json", ...headers } }, (res) => {
+      const peer = res.socket.getPeerCertificate();
+      let t = ""; res.on("data", (d) => { t += d; }); res.on("end", () => ok({ status: res.statusCode, headers: res.headers, text: t, fp: "sha256/" + crypto.createHash("sha256").update(peer.raw).digest("base64") }));
+    });
+    r.on("error", bad); if (headers.body) r.write(headers.body); r.end();
+  });
+  const h = await get("/api/hello");
+  assert.equal(h.status, 200); assert.equal(h.fp, hello.https.fingerprint, "the certificate served is the one hello names");
+  const si = await get("/api/signin", { body: JSON.stringify({ name: "Ana", password: "secret-pass", web: true }) });
+  assert.match(si.headers["set-cookie"][0], /; Secure/);
+  await call("PUT", "/api/control/settings", { plainHttp: false });
+  assert.equal((await call("GET", "/api/home")).status, 403, "plain HTTP refused");
+  assert.equal((await call("GET", "/api/hello", null, null)).status, 200, "…except hello (so apps can find the server)");
+  const page = await fetch(`${base}/`, { redirect: "manual" });
+  assert.equal(page.status, 301); assert.match(page.headers.get("location"), new RegExp(`^https://127\\.0\\.0\\.1:${TLS_PORT}/`));
+  assert.equal((await get("/api/home", { authorization: `Bearer ${token}` })).status, 200, "HTTPS still works");
+  await new Promise((ok, bad) => { const r = https.request({ host: "127.0.0.1", port: TLS_PORT, path: "/api/control/settings", method: "PUT", rejectUnauthorized: false, headers: { "content-type": "application/json", authorization: `Bearer ${token}` } }, (res) => { res.resume(); res.on("end", ok); }); r.on("error", bad); r.end(JSON.stringify({ plainHttp: true })); });
+  assert.equal((await call("GET", "/api/home")).status, 200, "switched back on");
+});
+
 // A pretend mail server that speaks just enough SMTP (no encryption: test only).
 const mails = [];
 const net = await import("node:net");

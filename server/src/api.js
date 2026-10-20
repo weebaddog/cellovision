@@ -14,7 +14,7 @@ const SHELF_KINDS = ["movies", "shows", "music", "photos", "videos"];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
-export function createApi({ db, auth, lib, scanner, streamer, images, reports, webDir, version, log = console.log }) {
+export function createApi({ db, auth, lib, scanner, streamer, images, reports, webDir, version, log = console.log, tls = null }) {
   const nowPlaying = new Map(); // token hash → { profile, device, item, position, paused, at, mode }
   const reportsFrom = new Map(); // ip → [times] (problem reports: at most 30 an hour from one address)
 
@@ -39,7 +39,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers });
     res.end(text);
   }
-  const cookie = (token) => `cv=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}`;
+  const cookie = (token, req) => `cv=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}${req?.socket?.encrypted ? "; Secure" : ""}`;
   const admin = (me) => { if (!me.admin) throw fail(403, "Only the server's admins can do that"); };
   const shelfFor = (me, id) => { const s = db.get("SELECT * FROM shelves WHERE id = ?", id); if (!s || (me.shelves && !me.shelves.includes(s.id))) throw fail(404, "No such shelf"); return s; };
   const itemFor = (me, id) => { const i = lib.get(me, id); if (!i) throw fail(404, "Not found (or not for this profile)"); return i; };
@@ -80,6 +80,8 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
 
   const open = {
     "GET /api/hello": () => ({ name: db.setting("serverName", `${os.hostname()} Cellovision`), version, setUp: auth.count() > 0,
+      // HTTPS: where, and the certificate's fingerprint (apps trust it once, then accept only it).
+      https: tls ? { port: tls.port(), fingerprint: tls.fingerprint } : null, plainHttp: db.setting("plainHttp", true),
       profiles: auth.profiles().map((p) => ({ id: p.id, name: p.name, hasPassword: !!p.has_password })) }),
     "POST /api/setup": async (req, res) => {
       if (auth.count() > 0) throw fail(409, "Already set up");
@@ -89,18 +91,18 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
       if (b.serverName) db.setSetting("serverName", String(b.serverName).slice(0, 60));
       const token = auth.signIn(b.name || "Admin", b.password, b.device, b.client, req.socket.remoteAddress);
       db.log("profile", `Server set up; admin profile ${b.name || "Admin"} made.`, id);
-      return [{ token }, { "set-cookie": cookie(token) }];
+      return [{ token }, { "set-cookie": cookie(token, req) }];
     },
     "POST /api/signin": async (req) => {
       const b = await body(req);
       const token = auth.signIn(b.name, b.password, b.device, b.client, req.socket.remoteAddress);
-      return [{ token }, b.web ? { "set-cookie": cookie(token) } : {}];
+      return [{ token }, b.web ? { "set-cookie": cookie(token, req) } : {}];
     },
     /** The web app signed in another way (Pair Code): keep that sign-in as its cookie. */
     "POST /api/session": async (req) => {
       const b = await body(req);
       if (!auth.who(String(b.token || ""))) throw fail(401, "Sign in");
-      return [{ ok: true }, { "set-cookie": cookie(String(b.token)) }];
+      return [{ ok: true }, { "set-cookie": cookie(String(b.token), req) }];
     },
     /** A problem from any app (also before signing in: a crash can happen on the way). */
     "POST /api/report": async (req) => {
@@ -219,7 +221,8 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         shelves: db.all("SELECT s.*, (SELECT COUNT(*) FROM items i WHERE i.shelf_id = s.id AND i.missing = 0) AS items FROM shelves s ORDER BY name").map((s) => ({ ...s, paths: j(s.paths, []) })),
         profiles: auth.profiles().map((p) => ({ ...p, admin: !!p.admin, shelves: j(p.shelves), hasPassword: !!p.has_password })),
         activity: db.all("SELECT * FROM activity ORDER BY id DESC LIMIT 60"),
-        settings: { tmdbKey: db.setting("tmdbKey") ? "set" : "", encoder: db.setting("encoder", "auto"), scanEvery: db.setting("scanEvery", 6) },
+        settings: { tmdbKey: db.setting("tmdbKey") ? "set" : "", encoder: db.setting("encoder", "auto"), scanEvery: db.setting("scanEvery", 6), plainHttp: db.setting("plainHttp", true) },
+        https: tls ? { port: tls.port(), fingerprint: tls.fingerprint } : null,
       };
     },
     "POST /api/control/shelves": async (req, res, me) => {
@@ -277,6 +280,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
       if (typeof b.tmdbKey === "string") db.setSetting("tmdbKey", b.tmdbKey.trim() || null);
       if (typeof b.encoder === "string") db.setSetting("encoder", ["auto", "libx264", "h264_amf", "h264_nvenc", "h264_qsv", "h264_videotoolbox", "h264_vaapi"].includes(b.encoder) ? b.encoder : "auto");
       if (b.scanEvery !== undefined) db.setSetting("scanEvery", Math.max(0, Math.min(168, +b.scanEvery || 0)));
+      if ("plainHttp" in b) db.setSetting("plainHttp", !!b.plainHttp);
       return { ok: true };
     },
     // Problem reports: the list, and where they're emailed.
@@ -357,6 +361,11 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
 
   return async function handle(req, res) {
     const url = new URL(req.url, "http://cellovision");
+    // Plain HTTP switched off: only "who are you?" answers there; everything else is HTTPS.
+    if (!req.socket.encrypted && tls && !db.setting("plainHttp", true) && url.pathname !== "/api/hello") {
+      if (!url.pathname.startsWith("/api/")) { res.writeHead(301, { location: `https://${String(req.headers.host || "localhost").replace(/:\d+$/, "")}:${tls.port()}${req.url}` }); return res.end(); }
+      return json(res, 403, { error: "This server only takes HTTPS: update the app, or switch plain HTTP back on in the Control Room" });
+    }
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("referrer-policy", "no-referrer");
     if (!url.pathname.startsWith("/api/")) {

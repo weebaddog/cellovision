@@ -49,6 +49,7 @@ class PlayerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         server = Server(this)
+        Trust.install(this) // (the trusted server's certificate, for the player's own requests)
         view = PlayerView(this).apply {
             keepScreenOn = true
             setShowNextButton(false); setShowPreviousButton(false)

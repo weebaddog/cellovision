@@ -16,7 +16,9 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
+import android.net.http.SslError
 import android.webkit.JavascriptInterface
+import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -42,6 +44,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         server = Server(this)
+        Trust.install(this)
         catchCrashes()
         root = FrameLayout(this)
         root.setBackgroundColor(Color.rgb(11, 11, 16))
@@ -53,7 +56,7 @@ class MainActivity : Activity() {
             insets
         }
         setContentView(root)
-        if (server.url.isEmpty()) showSetup(null) else showApp()
+        if (server.url.isEmpty()) showSetup(null) else { showApp(); upgrade() }
     }
 
     override fun onPause() { super.onPause(); CookieManager.getInstance().flush() }
@@ -103,7 +106,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = "192.168.1.20"; setSingleLine(); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO; setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
-            setText(server.url.removePrefix("http://").removeSuffix(":${Server.PORT}"))
+            setText(Uri.parse(server.url).host ?: "")
         }
         val status = text("", 14f, color = Color.rgb(163, 161, 182))
         val found = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -114,13 +117,7 @@ class MainActivity : Activity() {
             val u = Uri.parse(a)
             val base = if (u.port == -1 && u.scheme == "http") "${u.scheme}://${u.host}:${Server.PORT}" else "${u.scheme}://${u.host}${if (u.port > 0) ":${u.port}" else ""}"
             status.text = "Connecting to ${u.host}…"
-            Thread {
-                val name = Server.hello(base, 6000)
-                runOnUiThread {
-                    if (name == null) status.text = "No Cellovision server answered at ${u.host}. Check it's running and on this Wi-Fi."
-                    else { server.url = base; showApp() }
-                }
-            }.start()
+            connectTo(base) { status.text = it }
         }
         input.setOnEditorActionListener { _, _, _ -> connect(input.text.toString()); true }
         col.addView(input)
@@ -131,7 +128,7 @@ class MainActivity : Activity() {
                 val list = Server.find(this)
                 runOnUiThread {
                     status.text = if (list.isEmpty()) "No server answered on this Wi-Fi." else "Found ${list.size}. Pick yours:"
-                    for ((base, name) in list) found.addView(button("$name  ·  ${Uri.parse(base).host}") { server.url = base; showApp() })
+                    for ((base, name) in list) found.addView(button("$name  ·  ${Uri.parse(base).host}") { status.text = "Connecting to $name…"; connectTo(base) { status.text = it } })
                     found.getChildAt(0)?.requestFocus()
                 }
             }.start()
@@ -142,6 +139,62 @@ class MainActivity : Activity() {
         root.addView(ScrollView(this).apply { addView(col); isFillViewport = true })
         if (isTV) col.getChildAt(col.indexOfChild(input) + 2)?.requestFocus() else input.requestFocus()
     }
+
+    // ---- HTTPS: trust the server's own certificate once, then only that one ----------------------
+
+    /**
+     * Connects to the server at [base]: over HTTPS when it offers it (once the person trusts its
+     * certificate), else plain HTTP (older servers). [status] gets what went wrong.
+     */
+    private fun connectTo(base: String, status: (String) -> Unit) {
+        val u = Uri.parse(base)
+        Thread {
+            val plain = if (u.scheme == "http") Server.helloJson(base, 6000) else null
+            val secure = if (u.scheme == "https") base else plain?.optJSONObject("https")?.optInt("port", 0)?.takeIf { it > 0 }?.let { "https://${u.host}:$it" }
+            val probe = secure?.let { Trust.probe(it) }
+            runOnUiThread {
+                when {
+                    probe != null -> trust(secure, probe.second) { server.use(secure, probe.second); showApp() }
+                    plain != null && plain.optBoolean("plainHttp", true) -> { server.use(base, ""); showApp() }
+                    plain != null -> status("${u.host} only allows secure connections, but its secure port didn't answer.")
+                    else -> status("No Cellovision server answered at ${u.host}. Check it's running and on this Wi-Fi.")
+                }
+            }
+        }.start()
+    }
+
+    /** Asks before trusting a certificate the first time for this server, or when it changed. */
+    private fun trust(address: String, fp: String, ok: () -> Unit) {
+        val host = Uri.parse(address).host ?: ""
+        val known = server.trustedFor(host)
+        if (fp == known || host == "127.0.0.1" || host == "localhost") return ok()
+        android.app.AlertDialog.Builder(this)
+            .setTitle(if (known.isNotEmpty()) "The certificate CHANGED" else "Connect securely?")
+            .setMessage((if (known.isNotEmpty()) "$host now answers with a different secure certificate. If the server wasn't reinstalled or reset, someone on your network may be pretending to be it.\n\n" else "")
+                + "Check that this matches the fingerprint in the server's Control Room → Settings → Secure connection:\n\n$fp")
+            .setPositiveButton("Trust this server") { _, _ -> ok() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** A saved plain-HTTP server that now offers HTTPS is switched over (after the person trusts it). */
+    private fun upgrade() {
+        val u = Uri.parse(server.url)
+        if (u.scheme != "http") return
+        Thread {
+            val port = Server.helloJson(server.url, 4000)?.optJSONObject("https")?.optInt("port", 0) ?: 0
+            val secure = "https://${u.host}:$port"
+            val probe = if (port > 0) Trust.probe(secure) else null
+            if (probe != null) runOnUiThread { if (!isFinishing) trust(secure, probe.second) { server.use(secure, probe.second); showApp() } }
+        }.start()
+    }
+
+    /** The certificate a page was served with (every Android version WebView runs on). */
+    private fun certOf(error: SslError): java.security.cert.Certificate? = runCatching {
+        if (Build.VERSION.SDK_INT >= 29) error.certificate.x509Certificate
+        else android.net.http.SslCertificate.saveState(error.certificate).getByteArray("x509-certificate")
+            ?.let { java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(it.inputStream()) }
+    }.getOrNull()
 
     // ---- the app ----------------------------------------------------------------------------------
 
@@ -167,6 +220,15 @@ class MainActivity : Activity() {
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) showSetup("Couldn't reach ${server.url} (${error.description}).")
+            }
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                // Only the trusted server's own certificate gets through; anything else is refused.
+                val cert = certOf(error)
+                if (cert != null && server.fingerprint.isNotEmpty() && Uri.parse(error.url).host == Uri.parse(server.url).host && Trust.fingerprint(cert) == server.fingerprint) handler.proceed()
+                else {
+                    handler.cancel()
+                    if (Uri.parse(error.url).host == Uri.parse(server.url).host) showSetup("${server.url} answered with a different secure certificate than the one you trusted. If the server was reinstalled, connect again to check and trust its new one.")
+                }
             }
         }
         web = w

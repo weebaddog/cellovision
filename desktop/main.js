@@ -4,7 +4,7 @@
 //     project's server folder has, run by this app's own Node), so one install covers both.
 // Closing the window keeps the server running in the tray; Quit stops everything.
 
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, shell, nativeImage, nativeTheme, dialog } = require("electron");
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, shell, nativeImage, nativeTheme, dialog, net, session } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -15,7 +15,7 @@ const { signedRelease, newer, saveVerified, downloadUrl, installCommand, SITE } 
 
 const ICON = path.join(__dirname, "icon.png");
 if (process.env.CELLOVISION_PROFILE && !app.isPackaged) app.setPath("userData", process.env.CELLOVISION_PROFILE); // (testing)
-const PORT = 8420;
+const PORT = 8420, TLS_PORT = 8443;
 let win = null, tray = null, quitting = false, server = null, serverState = { running: false, error: null, ffmpeg: null, progress: null };
 
 const configFile = () => path.join(app.getPath("userData"), "config.json");
@@ -66,7 +66,7 @@ async function startServer() {
   const logFile = path.join(app.getPath("userData"), "server.log");
   const log = fs.createWriteStream(logFile, { flags: "a" });
   server = spawn(process.execPath, [serverMain()], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CELLOVISION_FFMPEG: ff, CELLOVISION_PORT: String(PORT), ...(serverKey() ? { CELLOVISION_SECRET_KEY: serverKey() } : {}) },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CELLOVISION_FFMPEG: ff, CELLOVISION_PORT: String(PORT), CELLOVISION_TLS_PORT: String(TLS_PORT), ...(serverKey() ? { CELLOVISION_SECRET_KEY: serverKey() } : {}) },
     stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
   server.stdout.pipe(log); server.stderr.pipe(log);
@@ -147,7 +147,8 @@ async function reportProblem(kind, message, detail = "") {
   const left = [];
   for (const p of pending.slice(-20)) {
     try {
-      const res = await fetch(`${origin()}/api/report`, { method: "POST", headers: { "content-type": "application/json", "x-cellovision": "1" }, body: JSON.stringify(p), signal: AbortSignal.timeout(5000) });
+      // (Chromium's network, so the pinned certificate is honoured)
+      const res = await net.fetch(`${origin()}/api/report`, { method: "POST", headers: { "content-type": "application/json", "x-cellovision": "1" }, body: JSON.stringify(p), signal: AbortSignal.timeout(5000) });
       if (!res.ok && res.status !== 429) left.push(p);
     } catch { left.push(p); } // (server not up: try again next time)
   }
@@ -159,14 +160,21 @@ process.on("unhandledRejection", (e) => { reportProblem("app error", e?.message 
 
 // ---- finding servers ---------------------------------------------------------------------------
 
-/** Is there a Cellovision server here? Resolves its /api/hello answer, or null. */
+/**
+ * Is there a Cellovision server here? Resolves its /api/hello answer, or null. Over HTTPS the
+ * server's own certificate isn't from a public authority, so it's read without that check and its
+ * fingerprint comes back as `fingerprint` for the caller to compare with the one it trusts.
+ */
 function hello(base, timeout = 1500) {
   return new Promise((resolve) => {
     let u; try { u = new URL("/api/hello", base); } catch { return resolve(null); }
-    const mod = u.protocol === "https:" ? require("node:https") : http;
-    const req = mod.get(u, { timeout, headers: { accept: "application/json" } }, (res) => {
+    const secure = u.protocol === "https:";
+    const mod = secure ? require("node:https") : http;
+    const req = mod.get(u, { timeout, headers: { accept: "application/json" }, ...(secure ? { rejectUnauthorized: false, agent: false } : {}) }, (res) => {
+      const raw = secure ? res.socket.getPeerCertificate()?.raw : null;
+      const fingerprint = raw ? "sha256/" + require("node:crypto").createHash("sha256").update(raw).digest("base64") : null;
       let t = ""; res.setEncoding("utf8"); res.on("data", (d) => { if (t.length < 65536) t += d; });
-      res.on("end", () => { try { const j = JSON.parse(t); resolve(typeof j.setUp === "boolean" && Array.isArray(j.profiles) ? j : null); } catch { resolve(null); } });
+      res.on("end", () => { try { const j = JSON.parse(t); resolve(typeof j.setUp === "boolean" && Array.isArray(j.profiles) ? { ...j, fingerprint } : null); } catch { resolve(null); } });
     });
     req.on("timeout", () => { req.destroy(); resolve(null); });
     req.on("error", () => resolve(null));
@@ -184,14 +192,60 @@ ipcMain.handle("cellovision:find", async () => {
   await Promise.all(Array.from({ length: 96 }, async () => { while (next < hosts.length) { const h = hosts[next++]; const r = await hello(`http://${h}:${PORT}`); if (r) found.push({ url: `http://${h}:${PORT}`, name: r.name, local: h === "127.0.0.1" }); } }));
   return { found: found.filter((f, i) => !(f.local && found.some((g, k) => k !== i && g.name === f.name && !g.local))), nets: localNets() };
 });
+// ---- HTTPS: trust the server's own certificate once, then only that one ---------------------------
+
+const isLocal = (host) => ["127.0.0.1", "localhost", "[::1]"].includes(host);
+
+/** Ask before trusting a server's certificate the first time (or when it changed). */
+async function askTrust(host, fp, changed) {
+  const { response } = await dialog.showMessageBox(win?.isVisible() ? win : null, {
+    type: changed ? "warning" : "question", title: "Cellovision", buttons: ["Trust this server", "Cancel"], defaultId: changed ? 1 : 0, cancelId: 1,
+    message: changed ? `The secure certificate of ${host} has CHANGED.` : `Connect securely to ${host}?`,
+    detail: (changed ? "If you didn't reinstall or reset the server, someone on your network may be pretending to be it.\n\n" : "")
+      + `Check that this matches the fingerprint in the server's Control Room → Settings → Secure connection:\n\n${fp}`,
+  });
+  return response === 0;
+}
+
+/**
+ * The secure address for a server we reached at `base` (plain or secure). Resolves
+ * { server, fingerprint } — the HTTPS address with the certificate the person trusted — or, for a
+ * server that doesn't offer HTTPS (older ones), its plain address; { error } if not trusted.
+ */
+async function secureAddress(base, timeout = 6000) {
+  const u = new URL(base);
+  const h = await hello(u.origin, timeout);
+  if (!h) return null;
+  let target = u, s = h;
+  if (u.protocol === "http:") {
+    if (!h.https?.port) return { server: u.origin, fingerprint: null };
+    target = new URL(`https://${u.hostname}:${h.https.port}`);
+    s = await hello(target.origin, timeout);
+    if (!s?.fingerprint) return h.plainHttp !== false ? { server: u.origin, fingerprint: null } : null; // (HTTPS port blocked)
+  }
+  const known = config.fingerprint && new URL(config.server || "http://x").hostname === target.hostname ? config.fingerprint : null;
+  if (!isLocal(target.hostname) && s.fingerprint !== known && !(await askTrust(target.host, s.fingerprint, !!known))) return { error: "Not connected: you didn't trust that server's certificate." };
+  return { server: target.origin, fingerprint: s.fingerprint };
+}
+
+/** Switch a saved plain-HTTP server over to HTTPS once it offers it (and follow this computer's own server's certificate). */
+async function upgradeServer() {
+  let u; try { u = new URL(config.server); } catch { return; }
+  if (u.protocol === "https:" && !isLocal(u.hostname)) return;
+  const r = await secureAddress(isLocal(u.hostname) ? `http://${u.hostname}:${PORT}` : config.server, 3000).catch(() => null);
+  if (r?.server && (r.server !== config.server || r.fingerprint !== config.fingerprint)) { config.server = r.server; config.fingerprint = r.fingerprint; saveConfig(); win?.loadURL(config.server).catch(() => {}); }
+}
+
 ipcMain.handle("cellovision:connect", async (_e, address) => {
   let a = String(address || "").trim();
   if (!a) return { error: "Type the server's address." };
   if (!/^https?:\/\//i.test(a)) a = `http://${a}`;
   let u; try { u = new URL(a); } catch { return { error: "That doesn't look like an address." }; }
   if (!u.port && u.protocol === "http:") u.port = String(PORT);
-  if (!(await hello(u.origin, 6000))) return { error: `No Cellovision server answered at ${u.host}. Check it's running and on the same network, or use Find servers.` };
-  config.server = u.origin; saveConfig();
+  const r = await secureAddress(u.origin);
+  if (!r) return { error: `No Cellovision server answered at ${u.host}. Check it's running and on the same network, or use Find servers.` };
+  if (r.error) return r;
+  config.server = r.server; config.fingerprint = r.fingerprint; saveConfig();
   win.loadURL(config.server).catch(() => {});
   return { ok: true };
 });
@@ -200,7 +254,11 @@ ipcMain.handle("cellovision:be-server", async (_e, on) => {
   config.runServer = !!on; saveConfig();
   if (on) {
     await startServer();
-    if (serverState.running) { config.server = `http://127.0.0.1:${PORT}`; saveConfig(); win.loadURL(config.server).catch(() => {}); if (app.isPackaged) setAutostart(true); }
+    if (serverState.running) {
+      const r = await secureAddress(`http://127.0.0.1:${PORT}`).catch(() => null);
+      config.server = r?.server || `http://127.0.0.1:${PORT}`; config.fingerprint = r?.fingerprint || null; saveConfig();
+      win.loadURL(config.server).catch(() => {}); if (app.isPackaged) setAutostart(true);
+    }
   } else stopServer();
   return serverState;
 });
@@ -225,7 +283,7 @@ function createWindow() {
     try { if (new URL(url).origin === origin()) return; } catch { /* bad url */ }
     e.preventDefault(); shell.openExternal(url);
   });
-  win.webContents.on("did-fail-load", (_e, code, desc, _url, isMain) => { if (isMain && code !== -3) setup({ error: `Couldn't reach ${config.server} (${desc}).` }); });
+  win.webContents.on("did-fail-load", (_e, code, desc, _url, isMain) => { if (isMain && code !== -3) setup({ error: /CERT/.test(desc) ? `${config.server} answered with a different secure certificate than the one you trusted. If the server was reinstalled, connect again below to check and trust its new one.` : `Couldn't reach ${config.server} (${desc}).` }); });
   // Fullscreen video from the page fills the screen (not just the window).
   win.webContents.on("enter-html-full-screen", () => win.setFullScreen(true));
   win.webContents.on("leave-html-full-screen", () => win.setFullScreen(false));
@@ -241,7 +299,7 @@ function buildMenu() {
     { label: "Open Cellovision", click: show },
     { type: "separator" },
     { label: serverState.running ? `Server running on this computer (port ${PORT})` : "This computer isn't the server", enabled: false },
-    serverState.running ? { label: "Open the Control Room", click: () => { show(); win.loadURL(`http://127.0.0.1:${PORT}/#/control`).catch(() => {}); } } : null,
+    serverState.running ? { label: "Open the Control Room", click: () => { show(); win.loadURL(`${isLocal(new URL(config.server || "http://x").hostname) ? config.server : `http://127.0.0.1:${PORT}`}/#/control`).catch(() => {}); } } : null,
     { label: "Change server…", click: () => { show(); setup({}); } },
     { type: "separator" },
     { label: "Theme", submenu: [["dark", "Dark"], ["light", "Light"], ["auto", "Auto"]].map(([k, l]) => ({ label: l, type: "radio", checked: theme === k, click: () => { config.theme = k; saveConfig(); nativeTheme.themeSource = k === "auto" ? "system" : k; win?.webContents.executeJavaScript(`window.CellovisionSetTheme && window.CellovisionSetTheme(${JSON.stringify(k)})`).catch(() => {}); buildMenu(); } })) },
@@ -270,7 +328,13 @@ function setAutostart(on) {
 app.whenReady().then(async () => {
   if (process.platform === "win32") app.setAppUserModelId("com.cellovision.desktop");
   nativeTheme.themeSource = config.theme === "auto" ? "system" : config.theme || "dark";
-  tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
+  // The chosen server's own certificate is accepted only if it's exactly the one that was trusted;
+  // everything else gets Chromium's normal checks.
+  session.defaultSession.setCertificateVerifyProc((req, done) => {
+    let host = null; try { host = new URL(config.server).hostname; } catch { /* none yet */ }
+    done(host && config.fingerprint && req.hostname === host.replace(/^\[|\]$/g, "") && req.certificate.fingerprint === config.fingerprint ? 0 : -3);
+  });
+  tray =new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.on("click", show);
   buildMenu();
   createWindow();
@@ -279,6 +343,7 @@ app.whenReady().then(async () => {
     // The window may have tried the local server before it was up.
     if (serverState.running && config.server?.includes("127.0.0.1")) win.loadURL(config.server).catch(() => {});
   }
+  upgradeServer();
   setTimeout(() => sendPending(), 10_000);
   // Updates: a minute after starting, then every 6 hours, while the switch is on.
   const maybeUpdate = () => { if (autoUpdate() && app.isPackaged) checkUpdates(); };

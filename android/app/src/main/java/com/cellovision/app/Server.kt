@@ -19,6 +19,20 @@ class Server(private val context: Context) {
         get() = prefs.getString("url", "") ?: ""
         set(v) = prefs.edit().putString("url", v).apply()
 
+    /** The trusted certificate of an HTTPS server (see Trust), or "" for a plain-HTTP one. */
+    var fingerprint: String
+        get() = prefs.getString("fingerprint", "") ?: ""
+        set(v) { prefs.edit().putString("fingerprint", v).apply(); Trust.pinned = v }
+
+    /** The certificate the person trusted for this host before (to notice when it changes), or "". */
+    fun trustedFor(host: String): String = prefs.getString("trust:$host", "") ?: ""
+
+    /** Watch from this server from now on (with its trusted certificate, for HTTPS). */
+    fun use(address: String, fp: String) {
+        if (fp.isNotEmpty()) prefs.edit().putString("trust:${android.net.Uri.parse(address).host}", fp).apply()
+        url = address; fingerprint = fp
+    }
+
     /** A request to the server, signed in as the app's pages are (their cookie). */
     fun call(method: String, path: String, body: String? = null): JSONObject {
         val conn = URL(url.trimEnd('/') + path).openConnection() as HttpURLConnection
@@ -54,12 +68,15 @@ class Server(private val context: Context) {
         const val PORT = 8420
 
         /** Is there a Cellovision server at this address? Its name, or null. */
-        fun hello(base: String, timeoutMs: Int = 1500): String? = runCatching {
+        fun hello(base: String, timeoutMs: Int = 1500): String? = helloJson(base, timeoutMs)?.optString("name", "Cellovision")
+
+        /** The server's whole /api/hello answer (plain HTTP), or null. */
+        fun helloJson(base: String, timeoutMs: Int = 1500): JSONObject? = runCatching {
             val c = URL(base.trimEnd('/') + "/api/hello").openConnection() as HttpURLConnection
             c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs
             if (c.responseCode != 200) return null
             val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
-            if (j.has("setUp") && j.has("profiles")) j.optString("name", "Cellovision") else null
+            if (j.has("setUp") && j.has("profiles")) j else null
         }.getOrNull()
 
         /** Every server answering on this device's Wi-Fi (asks all 254 addresses at once). */
