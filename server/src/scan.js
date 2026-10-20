@@ -142,7 +142,7 @@ export function createScanner({ db, artDir, tmdb = () => null, log = console.log
       let details = {};
       if (tm && (!old?.tmdb_id || !old?.overview)) { try { details = (await tm.show({ ...named, tmdb_id: nfo.tmdb_id }, showId)) || {}; } catch (e) { log(`[details] ${named.title}: ${e.message}`); } }
       const showTmdb = nfo.tmdb_id || details.tmdb_id || old?.tmdb_id;
-      upsert(clean({ id: showId, shelf_id: shelf.id, kind: "show", path: dir, seen_scan: scan, title: named.title, year: named.year,
+      upsert(clean({ id: showId, shelf_id: shelf.id, kind: "show", path: key, seen_scan: scan, title: named.title, year: named.year,
         ...clean({ ...details, age: ageOf(details.rating_label) }), ...nfo, poster: art.poster || details.poster, backdrop: art.backdrop || details.backdrop }));
       const seasons = new Map();
       await pool(eps, 4, async (file) => {
