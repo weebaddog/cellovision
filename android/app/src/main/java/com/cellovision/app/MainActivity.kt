@@ -121,6 +121,8 @@ class MainActivity : Activity() {
 
     @Suppress("SetJavaScriptEnabled")
     private fun showApp() {
+        // The address box's keyboard closes with the setup screen.
+        currentFocus?.let { getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(it.windowToken, 0) }
         val w = WebView(this)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true

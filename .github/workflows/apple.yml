@@ -1,0 +1,53 @@
+name: apple
+
+on:
+  push:
+    paths: ["apple/**", ".github/workflows/apple.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: apple-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # iPhone and Apple TV, built unsigned (installing needs the owner's Apple Developer account).
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the newest Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcodebuild -version
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: iPhone (simulator)
+        run: |
+          xcodebuild -project Cellovision.xcodeproj -scheme CellovisionPhone -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > phone.log 2>&1 \
+            || { grep -E "error:" phone.log | sort -u | head -80; tail -n 30 phone.log; exit 1; }
+          tail -n 5 phone.log
+      - name: Apple TV (simulator)
+        run: |
+          xcodebuild -project Cellovision.xcodeproj -scheme CellovisionTV -destination 'generic/platform=tvOS Simulator' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > tv.log 2>&1 \
+            || { grep -E "error:" tv.log | sort -u | head -80; tail -n 30 tv.log; exit 1; }
+          tail -n 5 tv.log
+      - name: iPhone (device, unsigned, for sideloading)
+        run: |
+          xcodebuild -project Cellovision.xcodeproj -scheme CellovisionPhone -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build > device.log 2>&1 \
+            || { grep -E "error:" device.log | sort -u | head -80; tail -n 30 device.log; exit 1; }
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          mkdir -p Payload && cp -R "$APP" Payload/ && zip -qr Cellovision-sideload.ipa Payload && ls -la Cellovision-sideload.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cellovision-iphone-sideload
+          path: apple/Cellovision-sideload.ipa
