@@ -179,8 +179,11 @@ class PlayerActivity : Activity() {
         view.useController = !isInPictureInPictureMode
     }
 
+    override fun onStart() { super.onStart(); Updater.screenShown() }
+
     override fun onStop() {
         super.onStop()
+        Updater.screenHidden(this)
         if (Build.VERSION.SDK_INT >= 24 && isInPictureInPictureMode) return
         player?.pause()
         if (isFinishing) release()

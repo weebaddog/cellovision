@@ -1,6 +1,6 @@
 {
   "name": "cellovision-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cellovision: your own media server (Shelves, Keep Watching, Fit to Device, Pair Code…).",
   "type": "module",
   "private": true,

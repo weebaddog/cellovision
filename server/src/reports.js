@@ -31,7 +31,7 @@ export function sendMail(cfg, subject, text) {
     sock.setTimeout(30_000, () => { sock.destroy(); reject(new Error("The mail server didn't answer")); });
     const from = cfg.from || cfg.user;
     const msg = [
-      `From: ${header("Cellovision")} <${from}>`, `To: <${cfg.to}>`, `Subject: ${header(subject)}`, `Date: ${new Date().toUTCString()}`,
+      `From: ${header(cfg.fromName || "Cellovision")} <${from}>`, `To: <${cfg.to}>`, `Subject: ${header(subject)}`, `Date: ${new Date().toUTCString()}`,
       `Message-ID: <${crypto.randomBytes(12).toString("hex")}@cellovision>`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8",
       "Content-Transfer-Encoding: base64", "", wrap(b64(text)),
     ].join("\r\n");
@@ -72,7 +72,7 @@ export function sendMail(cfg, subject, text) {
 
 const clip = (s, n) => (s === undefined || s === null ? null : String(s).slice(0, n));
 
-export function createReports({ db, version, log = console.log, send = sendMail }) {
+export function createReports({ db, version, product = "Cellovision", log = console.log, send = sendMail }) {
   db.raw.exec(`CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT, first INTEGER NOT NULL, last INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 1,
     sig TEXT NOT NULL, source TEXT, kind TEXT, message TEXT, detail TEXT, device TEXT, profile TEXT, app_version TEXT, sent INTEGER NOT NULL DEFAULT 0)`);
@@ -80,7 +80,7 @@ export function createReports({ db, version, log = console.log, send = sendMail 
 
   const mailCfg = () => {
     const c = db.setting("mail", null);
-    return c && c.to && c.user && c.pass ? c : null;
+    return c && c.to && c.user && c.pass ? { ...c, fromName: product } : null;
   };
 
   function format(rows) {
@@ -100,10 +100,10 @@ export function createReports({ db, version, log = console.log, send = sendMail 
     const rows = db.all("SELECT * FROM reports WHERE sent = 0 ORDER BY id LIMIT 50");
     if (!rows.length) return { sent: 0 };
     const people = rows.filter((r) => r.kind === "user").length;
-    const subject = people ? `Cellovision: ${people === 1 ? "a problem was reported" : `${people} problems were reported`}` : `Cellovision: ${rows.length} new ${rows.length === 1 ? "problem" : "problems"}`;
+    const subject = people ? `${product}: ${people === 1 ? "a problem was reported" : `${people} problems were reported`}` : `${product}: ${rows.length} new ${rows.length === 1 ? "problem" : "problems"}`;
     const server = db.setting("serverName", os.hostname());
     try {
-      await send(cfg, subject, `${server} (Cellovision ${version})\n\n${format(rows)}\n\n— Sent by your Cellovision server. Turn these emails off in the Control Room → Problem reports.\n`);
+      await send(cfg, subject, `${server} (${product} ${version})\n\n${format(rows)}\n\n— Sent by your ${product} server. Turn these emails off in its control panel → Problem reports.\n`);
       db.run(`UPDATE reports SET sent = 1 WHERE id IN (${rows.map(() => "?").join(",")})`, ...rows.map((r) => r.id));
       return { sent: rows.length };
     } catch (e) {
@@ -150,7 +150,7 @@ export function createReports({ db, version, log = console.log, send = sendMail 
     async test() {
       const cfg = mailCfg();
       if (!cfg) throw Object.assign(new Error("Fill in your email address, the sending account and its App Password first"), { status: 400 });
-      await send(cfg, "Cellovision: test email", `It works: problem reports from ${db.setting("serverName", os.hostname())} will come to this address.\n`);
+      await send(cfg, `${product}: test email`, `It works: problem reports from ${db.setting("serverName", os.hostname())} (${product}) will come to this address.\n`);
     },
   };
 }

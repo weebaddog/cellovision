@@ -4,13 +4,14 @@
 //     project's server folder has, run by this app's own Node), so one install covers both.
 // Closing the window keeps the server running in the tray; Quit stops everything.
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, nativeTheme, dialog } = require("electron");
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, shell, nativeImage, nativeTheme, dialog } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 const ffmpeg = require("./ffmpeg-get.js");
+const { signedRelease, newer, saveVerified, downloadUrl, installCommand, SITE } = require("./updates.js");
 
 const ICON = path.join(__dirname, "icon.png");
 if (process.env.CELLOVISION_PROFILE && !app.isPackaged) app.setPath("userData", process.env.CELLOVISION_PROFILE); // (testing)
@@ -67,6 +68,53 @@ async function startServer() {
 }
 function stopServer() { if (server) { server.kill(); server = null; } serverState.running = false; tell(); buildMenu(); }
 function tell() { win?.webContents.send("cellovision:server-state", serverState); }
+
+// ---- automatic updates (only versions signed with the owner's release key: see updates.js) ----------
+
+const UPDATE_NAME = process.platform === "win32" ? "cellovisionWindows" : "cellovisionLinux";
+const update = { ready: null, latest: null, checkedAt: 0, error: null, told: "" };
+const autoUpdate = () => config.autoUpdate !== false;
+const updateStatus = () => ({ auto: autoUpdate(), current: app.getVersion(), latest: update.latest, ready: update.ready?.version || null,
+  checkedAt: update.checkedAt, error: update.error, canInstall: app.isPackaged && (process.platform === "win32" || !!process.env.APPIMAGE) });
+
+async function checkUpdates() {
+  try {
+    const res = await fetch(`${SITE}/release.json`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`release list: HTTP ${res.status}`);
+    const r = signedRelease(await res.text(), UPDATE_NAME);
+    update.checkedAt = Date.now(); update.latest = r?.version || null; update.error = null;
+    if (!r || !newer(r.version, app.getVersion()) || update.ready?.version === r.version) return updateStatus();
+    if (!updateStatus().canInstall) {
+      if (update.told !== r.version) { update.told = r.version; new Notification({ title: "Cellovision update", body: `Cellovision ${r.version} is out: get it from ${SITE}/download/Cellovision.AppImage.`, icon: ICON }).show(); }
+      return updateStatus();
+    }
+    const file = process.platform === "win32" ? path.join(app.getPath("temp"), `Cellovision-Setup-${r.version}.exe`) : `${process.env.APPIMAGE}.new`;
+    await saveVerified(await fetch(downloadUrl(r)), file, r);
+    update.ready = { version: r.version, file };
+    // Never in the middle of watching: when the window is hidden (or on Quit, or "Restart to update").
+    if (!win || !win.isVisible()) installUpdate(true);
+    else new Notification({ title: "Cellovision update ready", body: `Version ${r.version} goes in when you close the window, or choose "Restart to update" in the tray menu.`, icon: ICON }).show();
+  } catch (e) { update.error = e.message; } finally { buildMenu(); }
+  return updateStatus();
+}
+
+function installUpdate(hidden) {
+  const u = update.ready;
+  if (!u) return;
+  quitting = true;
+  stopServer();
+  if (process.platform === "win32") {
+    const [cmd, args] = installCommand(u.file, process.execPath, hidden);
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsVerbatimArguments: true, windowsHide: true }).unref();
+  } else { fs.renameSync(u.file, process.env.APPIMAGE); app.relaunch({ args: hidden ? ["--hidden"] : [] }); }
+  app.quit();
+}
+
+function setAutoUpdate(on) { config.autoUpdate = !!on; saveConfig(); buildMenu(); if (on) checkUpdates(); return updateStatus(); }
+ipcMain.handle("cellovision:updates", () => updateStatus());
+ipcMain.handle("cellovision:set-auto-update", (_e, on) => setAutoUpdate(on));
+ipcMain.handle("cellovision:check-updates", () => checkUpdates());
+ipcMain.on("cellovision:install-update", () => installUpdate(false));
 
 // ---- problem reports (the server emails them to its owner) -----------------------------------------
 
@@ -150,6 +198,7 @@ function createWindow() {
   });
   win.removeMenu();
   win.on("close", (e) => { if (!quitting && (server || tray)) { e.preventDefault(); win.hide(); } });
+  win.on("hide", () => { if (update.ready && autoUpdate()) installUpdate(true); }); // nobody's watching: a good moment
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => {
     if (url.startsWith("file:")) return;
@@ -177,6 +226,12 @@ function buildMenu() {
     { type: "separator" },
     { label: "Theme", submenu: [["dark", "Dark"], ["light", "Light"], ["auto", "Auto"]].map(([k, l]) => ({ label: l, type: "radio", checked: theme === k, click: () => { config.theme = k; saveConfig(); nativeTheme.themeSource = k === "auto" ? "system" : k; win?.webContents.executeJavaScript(`window.CellovisionSetTheme && window.CellovisionSetTheme(${JSON.stringify(k)})`).catch(() => {}); buildMenu(); } })) },
     { label: "Start when I sign in", type: "checkbox", checked: !!config.autostart, click: (i) => setAutostart(i.checked) },
+    { label: "Update automatically", type: "checkbox", checked: autoUpdate(), click: (i) => setAutoUpdate(i.checked) },
+    update.ready ? { label: `Restart to update (${update.ready.version})`, click: () => installUpdate(false) }
+      : { label: "Check for updates", click: async () => {
+        const s = await checkUpdates();
+        if (!s.ready) dialog.showMessageBox({ type: "info", title: "Cellovision", message: s.error ? `Couldn't check for updates: ${s.error}` : s.latest && newer(s.latest, s.current) ? `Cellovision ${s.latest} is out.` : `Cellovision ${s.current} is the newest version.` });
+      } },
     { type: "separator" },
     { label: serverState.running ? "Quit (stops the server)" : "Quit", click: () => { quitting = true; app.quit(); } },
   ].filter(Boolean)));
@@ -205,6 +260,10 @@ app.whenReady().then(async () => {
     if (serverState.running && config.server?.includes("127.0.0.1")) win.loadURL(config.server).catch(() => {});
   }
   setTimeout(() => sendPending(), 10_000);
+  // Updates: a minute after starting, then every 6 hours, while the switch is on.
+  const maybeUpdate = () => { if (autoUpdate() && app.isPackaged) checkUpdates(); };
+  setTimeout(maybeUpdate, 60_000);
+  setInterval(maybeUpdate, 6 * 3600_000);
 });
 app.on("window-all-closed", () => { if (!server && !tray) app.quit(); });
 app.on("before-quit", () => { quitting = true; stopServer(); });

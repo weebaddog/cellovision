@@ -124,6 +124,7 @@ function toggleMenu() {
     h("a", { href: "#/pair", onclick: () => m.remove() }, "📺 Pair Code (sign in a TV)"),
     h("button", { onclick: () => { m.remove(); devicesSheet(); } }, "💻 My devices"),
     h("button", { onclick: () => { m.remove(); reportSheet(); } }, "🐞 Report a problem"),
+    window.CellovisionApp?.updates ? h("button", { onclick: () => { m.remove(); appUpdatesSheet(); } }, "⬆ Updates for this app") : null,
     window.CellovisionApp?.changeServer ? h("button", { onclick: () => { m.remove(); window.CellovisionApp.changeServer(); } }, "🔁 Change server") : null,
     h("hr"),
     h("div", { class: "small muted", style: { padding: "4px 12px" } }, "Theme"),
@@ -132,6 +133,26 @@ function toggleMenu() {
     h("button", { onclick: async () => { m.remove(); await api("POST", "/api/signout").catch(() => {}); state.me = null; state.server = await api("GET", "/api/hello"); signInPage(); } }, "↩ Switch profile / sign out"));
   document.body.append(m);
   setTimeout(() => document.addEventListener("click", function off(e) { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("click", off); } }), 0);
+}
+
+/** The Windows/Linux/Android app's own updates (it fetches only versions signed by the owner). */
+async function appUpdatesSheet() {
+  const app = window.CellovisionApp;
+  const read = async () => { const s = await app.updates(); return typeof s === "string" ? JSON.parse(s) : s; };
+  let s = await read();
+  sheet("Updates for this app", (b) => {
+    const status = h("p", { class: "muted" });
+    const draw = () => { status.textContent = [`This is Cellovision ${s.current || s.version || ""}.`, s.ready ? `Version ${s.ready} is ready to go in.` : s.latest ? `Newest: ${s.latest}.` : "", s.status || "", s.error ? `Last check failed: ${s.error}` : ""].filter(Boolean).join(" "); };
+    const sw = h("input", { type: "checkbox", checked: s.auto, onchange: async (e) => { await app.setAutoUpdate(e.target.checked); s = await read(); draw(); } });
+    draw();
+    b.append(
+      h("label", { class: "li", style: { padding: "8px 0" } }, sw, h("div", { class: "grow" }, h("div", { style: { fontWeight: "700" } }, "Update automatically"),
+        h("div", { class: "muted small" }, "New versions download in the background and go in when you're not watching. Only versions signed by the owner are accepted."))),
+      status,
+      h("div", { class: "btns" },
+        h("button", { class: "btn", onclick: async (e) => { e.target.disabled = true; const r = await app.checkUpdatesNow(); s = await read(); if (typeof r === "string") s.status = r; draw(); e.target.disabled = false; } }, "Check now"),
+        s.ready && app.installUpdate ? h("button", { class: "btn primary", onclick: () => app.installUpdate() }, "Restart to update") : null));
+  });
 }
 
 async function devicesSheet() {

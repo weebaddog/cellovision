@@ -1,7 +1,7 @@
 {
   "name": "cellovision-desktop",
   "productName": "Cellovision",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cellovision for Windows and Linux: watch from your server, or be the server",
   "author": "Cellovision <90303180+weebaddog@users.noreply.github.com>",
   "license": "MIT",
@@ -11,7 +11,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win nsis",
+    "dist:win": "electron-builder --win nsis && node after-build.mjs",
     "dist:linux": "electron-builder --linux AppImage deb"
   },
   "devDependencies": {
@@ -21,7 +21,7 @@
   "build": {
     "appId": "com.cellovision.desktop",
     "productName": "Cellovision",
-    "files": ["main.js", "preload.js", "ffmpeg-get.js", "setup.html", "setup.js", "setup.css", "icon.png"],
+    "files": ["main.js", "preload.js", "ffmpeg-get.js", "updates.js", "setup.html", "setup.js", "setup.css", "icon.png"],
     "extraResources": [
       { "from": "../server/src", "to": "server/src" },
       { "from": "../server/package.json", "to": "server/package.json" },

@@ -58,6 +58,16 @@ class MainActivity : Activity() {
 
     override fun onPause() { super.onPause(); CookieManager.getInstance().flush() }
 
+    // ---- updates: at start and every 6 hours while open; put in when the app leaves the screen ----
+    private val updateTimer = android.os.Handler(android.os.Looper.getMainLooper())
+    private val updateTick = object : Runnable { override fun run() { checkUpdates(true); updateTimer.postDelayed(this, 6 * 3600_000L) } }
+    private fun checkUpdates(auto: Boolean) {
+        if (!Updater.enabled(this)) return
+        Thread { runCatching { Updater.check(this, auto) }.onFailure { Updater.status = "Couldn't check for updates: ${it.message}" } }.start()
+    }
+    override fun onStart() { super.onStart(); Updater.screenShown(); updateTimer.postDelayed(updateTick, 15_000) }
+    override fun onStop() { super.onStop(); updateTimer.removeCallbacks(updateTick); Updater.screenHidden(this) }
+
     /** A crash is written down as the app closes, and sent to the server the next time it opens. */
     private fun catchCrashes() {
         val file = java.io.File(filesDir, "crash.txt")
@@ -175,6 +185,12 @@ class MainActivity : Activity() {
             startActivity(Intent(this@MainActivity, PlayerActivity::class.java).putExtra("id", id).putExtra("start", start).putExtra("queue", queue ?: ""))
         }
         @JavascriptInterface fun changeServer() { runOnUiThread { server.url = ""; showSetup(null) } }
+
+        // "Update automatically" (shown in the app's menu when the page is inside this app)
+        @JavascriptInterface fun updates(): String = org.json.JSONObject().put("auto", Updater.enabled(this@MainActivity)).put("status", Updater.status)
+            .put("version", packageManager.getPackageInfo(packageName, 0).versionName).toString()
+        @JavascriptInterface fun setAutoUpdate(on: Boolean) { Updater.setEnabled(this@MainActivity, on); if (on) checkUpdates(true) }
+        @JavascriptInterface fun checkUpdatesNow(): String = runCatching { Updater.check(this@MainActivity, auto = false) }.getOrElse { "Couldn't check: ${it.message}" }
         @JavascriptInterface fun themeChanged(mode: String) { /* the app's own screens are always dark */ }
     }
 

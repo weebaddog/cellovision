@@ -2,7 +2,14 @@
 // page can also find and pick servers and make this computer the server.
 const { contextBridge, ipcRenderer } = require("electron");
 
-const common = { themeChanged: (mode) => ipcRenderer.send("cellovision:theme", String(mode)) };
+const common = {
+  themeChanged: (mode) => ipcRenderer.send("cellovision:theme", String(mode)),
+  // This app's own "Update automatically" switch, shown in the menu.
+  updates: () => ipcRenderer.invoke("cellovision:updates"),
+  setAutoUpdate: (on) => ipcRenderer.invoke("cellovision:set-auto-update", !!on),
+  checkUpdatesNow: () => ipcRenderer.invoke("cellovision:check-updates"),
+  installUpdate: () => ipcRenderer.send("cellovision:install-update"),
+};
 
 if (location.protocol !== "file:") {
   contextBridge.exposeInMainWorld("CellovisionApp", common);
