@@ -5,6 +5,9 @@ import { h, api, state, toast, go, applyTheme, setTheme, localGet, act, sheet } 
 import { homePage, shelfPage, itemPage, searchPage, heartsPage, setsPage, setPage, mixtapesPage, mixtapePage, pairPage } from "./pages.js";
 import { controlPage } from "./control.js";
 import { enableTv } from "./tv.js";
+import { watchForErrors, reportSheet } from "./report.js";
+
+watchForErrors();
 
 const app = document.getElementById("app");
 applyTheme();
@@ -120,6 +123,7 @@ function toggleMenu() {
     h("div", { style: { padding: "8px 12px" } }, h("strong", {}, state.me.name), h("div", { class: "muted small" }, state.server.name)), h("hr"),
     h("a", { href: "#/pair", onclick: () => m.remove() }, "📺 Pair Code (sign in a TV)"),
     h("button", { onclick: () => { m.remove(); devicesSheet(); } }, "💻 My devices"),
+    h("button", { onclick: () => { m.remove(); reportSheet(); } }, "🐞 Report a problem"),
     window.CellovisionApp?.changeServer ? h("button", { onclick: () => { m.remove(); window.CellovisionApp.changeServer(); } }, "🔁 Change server") : null,
     h("hr"),
     h("div", { class: "small muted", style: { padding: "4px 12px" } }, "Theme"),

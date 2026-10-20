@@ -1,6 +1,7 @@
 // Watching and listening: the video player, the music bar, and the photo viewer.
 
 import { h, api, mediaUrl, img, toast, fmtTime, deviceCaps, localGet, localSet, ep } from "./core.js";
+import { report } from "./report.js";
 
 const MODE_LABEL = { direct: "Direct", remux: "Repackaged", convert: "Converted" };
 
@@ -71,7 +72,11 @@ export async function playVideo(id, opts = {}) {
     if (isHls() && window.Hls?.isSupported()) {
       hls = new window.Hls({ maxBufferLength: 60, backBufferLength: 90, manifestLoadingMaxRetry: 8, levelLoadingMaxRetry: 8, fragLoadingMaxRetry: 8 });
       hls.loadSource(src); hls.attachMedia(video);
-      hls.on(window.Hls.Events.ERROR, (_e, d) => { if (d.fatal) { msg.textContent = `Playback problem: ${d.details}`; msg.classList.remove("hidden"); } });
+      hls.on(window.Hls.Events.ERROR, (_e, d) => {
+        if (!d.fatal) return;
+        msg.textContent = `Playback problem: ${d.details}`; msg.classList.remove("hidden");
+        report("playback failed", `${item.title}: ${d.details}`, `mode ${plan.mode} (${(plan.reasons || []).join(", ")})\n${d.error?.message || ""}\n${navigator.userAgent}`);
+      });
     } else video.src = src;
     if (plan.subtitle) setTrack(plan.subtitle);
     const resumeAt = plan.mode === "direct" ? (at ?? plan.resume ?? 0) : 0;
@@ -183,7 +188,9 @@ export async function playVideo(id, opts = {}) {
     else if (opts.queue?.length) { const [n, ...rest] = opts.queue; close(true); playVideo(n, { start: 0, queue: rest }); }
     else close(true);
   });
-  video.addEventListener("error", () => { if (!video.error || hls) return; msg.textContent = "This device couldn't play that. Converting it instead…"; msg.classList.remove("hidden"); caps.video = ["h264"]; caps.containers = ["mp4"]; load(now()); });
+  video.addEventListener("error", () => {
+    if (!video.error || hls) return;
+    report("playback failed", `${item.title}: this device couldn't play it directly (error ${video.error.code})`, `mode ${plan?.mode}\n${video.error.message || ""}\n${navigator.userAgent}`); msg.textContent = "This device couldn't play that. Converting it instead…"; msg.classList.remove("hidden"); caps.video = ["h264"]; caps.containers = ["mp4"]; load(now()); });
   const pos = (e) => { const r = seekBar.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * duration(); };
   seekBar.addEventListener("click", (e) => seek(pos(e)));
   seekBar.addEventListener("mousemove", (e) => { hover.textContent = fmtTime(pos(e)); hover.style.left = `${(pos(e) / (duration() || 1)) * 100}%`; hover.classList.remove("hidden"); });

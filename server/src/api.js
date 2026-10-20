@@ -14,8 +14,9 @@ const SHELF_KINDS = ["movies", "shows", "music", "photos", "videos"];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
-export function createApi({ db, auth, lib, scanner, streamer, images, webDir, version, log = console.log }) {
+export function createApi({ db, auth, lib, scanner, streamer, images, reports, webDir, version, log = console.log }) {
   const nowPlaying = new Map(); // token hash → { profile, device, item, position, paused, at, mode }
+  const reportsFrom = new Map(); // ip → [times] (problem reports: at most 30 an hour from one address)
 
   // ---- plumbing ------------------------------------------------------------------------------
 
@@ -100,6 +101,18 @@ export function createApi({ db, auth, lib, scanner, streamer, images, webDir, ve
       const b = await body(req);
       if (!auth.who(String(b.token || ""))) throw fail(401, "Sign in");
       return [{ ok: true }, { "set-cookie": cookie(String(b.token)) }];
+    },
+    /** A problem from any app (also before signing in: a crash can happen on the way). */
+    "POST /api/report": async (req) => {
+      const ip = req.socket.remoteAddress || "";
+      const list = (reportsFrom.get(ip) || []).filter((t) => Date.now() - t < 3600_000);
+      if (list.length >= 30) throw fail(429, "Too many reports; thanks, we have plenty");
+      list.push(Date.now()); reportsFrom.set(ip, list);
+      const b = await body(req);
+      const t = tokenOf(req, new URL(req.url, "http://x"));
+      const me = t && auth.who(t);
+      reports.add({ ...b, profile: me?.name || null }, b.kind === "user");
+      return { ok: true };
     },
     "POST /api/pair/start": async (req) => { const b = await body(req); return auth.pairStart(String(b.device || "TV").slice(0, 60), String(b.client || "").slice(0, 40)); },
     "POST /api/pair/check": async (req) => { const b = await body(req); return auth.pairCheck(String(b.code || ""), String(b.secret || "")); },
@@ -266,6 +279,14 @@ export function createApi({ db, auth, lib, scanner, streamer, images, webDir, ve
       if (b.scanEvery !== undefined) db.setSetting("scanEvery", Math.max(0, Math.min(168, +b.scanEvery || 0)));
       return { ok: true };
     },
+    // Problem reports: the list, and where they're emailed.
+    "GET /api/control/reports": (req, res, me) => { admin(me); return { reports: reports.list(), mail: reports.settings() }; },
+    "PUT /api/control/reports": async (req, res, me) => { admin(me); reports.save(await body(req)); return { mail: reports.settings() }; },
+    "POST /api/control/reports/test": async (req, res, me) => {
+      admin(me);
+      try { await reports.test(); } catch (e) { throw fail(e.status || 400, e.message); }
+      return { ok: true };
+    },
     /** Folders on this computer, to pick media folders from. */
     "GET /api/control/folders": (req, res, me, url) => {
       admin(me);
@@ -360,7 +381,10 @@ export function createApi({ db, auth, lib, scanner, streamer, images, webDir, ve
       const r = await route(req, res, me, url, token);
       return Array.isArray(r) ? json(res, 200, r[0], r[1]) : json(res, 200, r);
     } catch (e) {
-      if (!e.status) log(`[api] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
+      if (!e.status) {
+        log(`[api] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
+        reports?.add({ source: "server", kind: "server error", message: `${req.method} ${url.pathname}: ${e.message}`, detail: e.stack, version });
+      }
       if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the server" });
       else res.end();
     }

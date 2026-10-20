@@ -38,6 +38,18 @@ class Server(private val context: Context) {
 
     fun cookie(): String? = CookieManager.getInstance().getCookie(url)
 
+    /** Tells the server about a problem (it emails the owner). Never throws; call off the main thread. */
+    fun report(kind: String, message: String, detail: String? = null) {
+        if (url.isEmpty()) return
+        runCatching {
+            val isTV = context.packageManager.hasSystemFeature("android.software.leanback")
+            val body = JSONObject().put("source", "android").put("kind", kind).put("message", message.take(500)).put("detail", (detail ?: "").take(6000))
+                .put("device", "${if (isTV) "Android TV" else "Android"} · ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE}")
+                .put("version", context.packageManager.getPackageInfo(context.packageName, 0).versionName)
+            call("POST", "/api/report", body.toString())
+        }
+    }
+
     companion object {
         const val PORT = 8420
 

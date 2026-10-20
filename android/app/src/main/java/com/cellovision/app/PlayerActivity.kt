@@ -119,8 +119,10 @@ class PlayerActivity : Activity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { report() }
             override fun onPlayerError(error: PlaybackException) {
-                // The device's decoder couldn't cope after all: ask the server to convert it.
                 val p = plan ?: return
+                val title = item?.optString("title") ?: itemId
+                Thread { server.report("playback failed", "$title: ${error.errorCodeName}", "mode ${p.optString("mode")}\n${error.message}\n${android.util.Log.getStackTraceString(error)}") }.start()
+                // The device's decoder couldn't cope after all: ask the server to convert it.
                 if (p.optString("mode") == "direct" || p.optString("mode") == "remux") {
                     Toast.makeText(this@PlayerActivity, "Converting this for your device…", Toast.LENGTH_SHORT).show()
                     Thread {

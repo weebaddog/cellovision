@@ -16,6 +16,7 @@ export async function controlPage() {
     shelvesBlock(c),
     profilesBlock(c),
     settingsBlock(c),
+    await reportsBlock(),
     h("h2", {}, "What happened"),
     h("div", { class: "list" }, c.activity.length ? c.activity.map((a) => h("div", { class: "li" }, h("span", { class: "muted small", style: { width: "150px", flex: "none" } }, new Date(a.at).toLocaleString()), h("div", { class: "grow" }, h("div", {}, a.text)))) : h("div", { class: "empty" }, "Nothing yet.")));
   // Keep "now" fresh while the page is open.
@@ -145,6 +146,37 @@ function editProfile(p, c) {
         }, "Saved") }, "Save"),
         p ? h("button", { class: "btn danger", onclick: () => confirmBox(`Delete ${p.name}?`, "Their Keep Watching, Hearts and Mixtapes go too.", "Delete", async () => { await act(() => api("DELETE", "/api/control/profiles", { id: p.id }), "Deleted"); close(); go("#/control"); }) }, "Delete") : null));
   });
+}
+
+// ---- Problem reports ------------------------------------------------------------------------------
+
+async function reportsBlock() {
+  const r = await api("GET", "/api/control/reports");
+  const m = r.mail;
+  const to = h("input", { type: "text", value: m.to, placeholder: "you@gmail.com", autocomplete: "email" });
+  const user = h("input", { type: "text", value: m.user, placeholder: "the Gmail account that sends them (can be the same)", autocomplete: "off" });
+  const pass = h("input", { type: "password", placeholder: m.hasPass ? "Saved (type a new one to replace it)" : "16-letter App Password from Google", autocomplete: "new-password" });
+  const host = h("input", { type: "text", value: m.host }), port = h("input", { type: "number", value: String(m.port) });
+  const off = h("input", { type: "checkbox", checked: m.off });
+  const save = () => api("PUT", "/api/control/reports", { to: to.value, user: user.value, host: host.value, port: +port.value, off: off.checked, ...(pass.value ? { pass: pass.value } : {}) });
+  return h("section", { class: "row" }, h("h2", {}, "Problem reports"),
+    h("div", { class: "panel" },
+      h("p", { class: "muted" }, "Crashes, errors and failed playback from every Cellovision app (and anything people send with “Report a problem”) are emailed to you. The same problem again is counted, not repeated."),
+      h("label", { class: "field" }, h("span", {}, "Send them to"), to),
+      h("label", { class: "field" }, h("span", {}, "Send from (Gmail account)"), user),
+      h("label", { class: "field" }, h("span", {}, "App Password for that account"), pass,
+        h("div", { class: "muted small", style: { marginTop: "4px" } }, "Google won't take your normal password here. Make an App Password: myaccount.google.com → Security → 2-Step Verification (turn on) → App passwords → name it “Cellovision” → copy the 16 letters here. You can delete it there any time.")),
+      h("details", {}, h("summary", { class: "muted small" }, "Not Gmail?"), h("div", { class: "toolbar" }, h("label", { class: "field", style: { flex: "1" } }, h("span", {}, "Mail server"), host), h("label", { class: "field", style: { width: "110px" } }, h("span", {}, "Port (SSL)"), port))),
+      h("label", { class: "li", style: { padding: "8px 0" } }, off, h("div", { class: "grow" }, h("div", {}, "Pause the emails (reports are still kept here)"))),
+      m.lastError ? h("p", { style: { color: "var(--bad)" } }, `Last email failed: ${m.lastError.message}`) : null,
+      h("div", { class: "btns" },
+        h("button", { class: "btn primary", onclick: () => act(async () => { await save(); go("#/control"); }, "Saved") }, "Save"),
+        h("button", { class: "btn", onclick: () => act(async () => { await save(); await api("POST", "/api/control/reports/test"); }, "Test email sent: check your inbox") }, "Send a test email"))),
+    r.reports.length ? h("div", { class: "list" }, r.reports.slice(0, 30).map((x) => h("div", { class: "li" },
+      h("span", {}, x.kind === "user" ? "🗣" : "🐞"),
+      h("div", { class: "grow" }, h("div", { style: { fontWeight: "600", whiteSpace: "normal" } }, x.message),
+        h("div", { class: "muted small" }, `${x.source} · ${x.kind}${x.count > 1 ? ` · ${x.count} times` : ""} · ${new Date(x.last).toLocaleString()}${x.device ? ` · ${x.device}` : ""}${x.sent ? " · emailed" : ""}`)))))
+      : h("p", { class: "muted" }, "No problems reported yet."));
 }
 
 // ---- Settings --------------------------------------------------------------------------------

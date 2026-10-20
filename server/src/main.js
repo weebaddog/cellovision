@@ -18,6 +18,7 @@ import { createImages } from "./images.js";
 import { createTmdb } from "./meta.js";
 import { createApi } from "./api.js";
 import { FF } from "./probe.js";
+import { createReports } from "./reports.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "server", "package.json"), "utf8")).version;
@@ -37,9 +38,10 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
   const lib = createLibrary(db);
   const tmdb = () => createTmdb({ key: db.setting("tmdbKey"), artDir, fetchImpl });
   const scanner = createScanner({ db, artDir, tmdb, log });
-  const streamer = createStreamer({ cacheDir, log, encoderSetting: () => db.setting("encoder", "auto") });
+  const reports = createReports({ db, version: VERSION, log });
+  const streamer = createStreamer({ cacheDir, log, encoderSetting: () => db.setting("encoder", "auto"), onFail: (title, why) => reports.add({ source: "server", kind: "conversion failed", message: `${title}: ${why}`, version: VERSION }) });
   const images = createImages({ cacheDir });
-  const handle = createApi({ db, auth, lib, scanner, streamer, images, webDir: path.join(ROOT, "web"), version: VERSION, log });
+  const handle = createApi({ db, auth, lib, scanner, streamer, images, reports, webDir: path.join(ROOT, "web"), version: VERSION, log });
   const server = http.createServer(handle);
   server.keepAliveTimeout = 65_000;
   server.requestTimeout = 0; // (long streams)
@@ -53,7 +55,7 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
   chores.unref();
 
   return {
-    db, auth, lib, scanner, streamer, server,
+    db, auth, lib, scanner, streamer, reports, server,
     listen(port = Number(process.env.CELLOVISION_PORT || 8420), host = "0.0.0.0") {
       return new Promise((ok, bad) => server.once("error", bad).listen(port, host, () => { log(`[cellovision] ${VERSION} on port ${port} · data in ${dataDir} · ffmpeg ${FF.ffmpeg}`); ok(); }));
     },

@@ -50,13 +50,44 @@ async function startServer() {
   });
   server.stdout.pipe(log); server.stderr.pipe(log);
   server.stderr.on("data", (d) => { const s = String(d); if (/EADDRINUSE/.test(s)) serverState.error = `Port ${PORT} is already in use (is another Cellovision server running?).`; });
-  server.on("exit", (code) => { server = null; serverState.running = false; if (code && !quitting && !serverState.error) serverState.error = `The server stopped (code ${code}). Details: ${logFile}`; tell(); buildMenu(); });
+  server.on("exit", (code) => {
+    server = null; serverState.running = false;
+    if (code && !quitting) {
+      if (!serverState.error) serverState.error = `The server stopped (code ${code}). Details: ${logFile}`;
+      const tail = (() => { try { return fs.readFileSync(logFile, "utf8").slice(-4000); } catch { return ""; } })();
+      reportProblem("server crashed", `The server on this computer stopped (code ${code})`, tail).catch(() => {});
+      // Back on its feet in a few seconds (the report goes once it answers again).
+      setTimeout(() => { if (config.runServer && !quitting) startServer().then(() => sendPending()); }, 5000);
+    }
+    tell(); buildMenu();
+  });
   // Running once it answers.
   for (let i = 0; i < 40 && server; i++) { if (await hello(`http://127.0.0.1:${PORT}`, 1000)) { serverState.running = true; break; } await new Promise((r) => setTimeout(r, 250)); }
   tell(); buildMenu();
 }
 function stopServer() { if (server) { server.kill(); server = null; } serverState.running = false; tell(); buildMenu(); }
 function tell() { win?.webContents.send("cellovision:server-state", serverState); }
+
+// ---- problem reports (the server emails them to its owner) -----------------------------------------
+
+const pendingFile = () => path.join(app.getPath("userData"), "pending-reports.json");
+async function reportProblem(kind, message, detail = "") {
+  const r = { source: "desktop", kind, message: String(message).slice(0, 500), detail: String(detail).slice(0, 6000),
+    device: `Cellovision desktop · ${process.platform === "win32" ? "Windows" : "Linux"} ${os.release()}`, version: app.getVersion() };
+  const pending = (() => { try { return JSON.parse(fs.readFileSync(pendingFile(), "utf8")); } catch { return []; } })();
+  if (kind) pending.push(r);
+  const left = [];
+  for (const p of pending.slice(-20)) {
+    try {
+      const res = await fetch(`${origin()}/api/report`, { method: "POST", headers: { "content-type": "application/json", "x-cellovision": "1" }, body: JSON.stringify(p), signal: AbortSignal.timeout(5000) });
+      if (!res.ok && res.status !== 429) left.push(p);
+    } catch { left.push(p); } // (server not up: try again next time)
+  }
+  try { if (left.length) fs.writeFileSync(pendingFile(), JSON.stringify(left)); else fs.rmSync(pendingFile(), { force: true }); } catch { /* full disk */ }
+}
+async function sendPending() { try { if (fs.existsSync(pendingFile()) && origin()) await reportProblem(null, ""); } catch { /* later */ } }
+process.on("uncaughtException", (e) => { reportProblem("app error", e.message, e.stack).catch(() => {}); });
+process.on("unhandledRejection", (e) => { reportProblem("app error", e?.message || String(e), e?.stack || "").catch(() => {}); });
 
 // ---- finding servers ---------------------------------------------------------------------------
 
@@ -173,6 +204,7 @@ app.whenReady().then(async () => {
     // The window may have tried the local server before it was up.
     if (serverState.running && config.server?.includes("127.0.0.1")) win.loadURL(config.server).catch(() => {});
   }
+  setTimeout(() => sendPending(), 10_000);
 });
 app.on("window-all-closed", () => { if (!server && !tray) app.quit(); });
 app.on("before-quit", () => { quitting = true; stopServer(); });

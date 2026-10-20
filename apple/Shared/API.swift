@@ -34,6 +34,17 @@ struct API {
         _ = try? await request(method, path, body: body)
     }
 
+    /// Tells the server about a problem (it emails the owner).
+    func report(_ kind: String, _ message: String, _ detail: String = "") async {
+        #if os(tvOS)
+        let device = "Apple TV"
+        #else
+        let device = "iPhone"
+        #endif
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        await fire("POST", "/api/report", ["source": "apple", "kind": kind, "message": String(message.prefix(500)), "detail": String(detail.prefix(6000)), "device": "\(device) · \(ProcessInfo.processInfo.operatingSystemVersionString)", "version": version])
+    }
+
     /// An item's page: the item plus its family (seasons, episodes, tracks…).
     func page(_ id: String) async throws -> (Item, PageExtra) {
         let data = try await request("GET", "/api/item?id=\(id)")

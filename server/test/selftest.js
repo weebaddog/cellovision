@@ -302,6 +302,58 @@ await test("a file that disappears is marked missing, not deleted", async () => 
   assert.equal(srv.db.get("SELECT missing FROM items WHERE id = ?", ids["Toy Story"]).missing, 1);
   assert.equal(srv.db.get("SELECT position FROM marks WHERE item_id = ?", ids["Toy Story"]).position, 40); // (Keep Watching kept)
 });
+// A pretend mail server that speaks just enough SMTP (no encryption: test only).
+const mails = [];
+const net = await import("node:net");
+const smtp = net.createServer((s) => {
+  let data = null, user = "", step = "";
+  s.write("220 pretend mail\r\n");
+  s.on("data", (d) => {
+    for (const line of d.toString().split("\r\n")) {
+      if (data !== null) { if (line === ".") { mails.push(data); data = null; s.write("250 queued\r\n"); } else data += line + "\n"; continue; }
+      if (!line) continue;
+      if (step === "user") { user = Buffer.from(line, "base64").toString(); step = "pass"; s.write("334 UGFzc3dvcmQ6\r\n"); continue; }
+      if (step === "pass") { step = ""; s.write(user === "me@test.dev" && Buffer.from(line, "base64").toString() === "app pass" ? "235 ok\r\n" : "535 5.7.8 Username and Password not accepted\r\n"); continue; }
+      if (/^EHLO/.test(line)) s.write("250-pretend\r\n250 AUTH LOGIN\r\n");
+      else if (line === "AUTH LOGIN") { step = "user"; s.write("334 VXNlcm5hbWU6\r\n"); }
+      else if (/^(MAIL|RCPT)/.test(line)) s.write("250 ok\r\n");
+      else if (line === "DATA") { data = ""; s.write("354 go\r\n"); }
+      else if (line === "QUIT") { s.write("221 bye\r\n"); s.end(); }
+    }
+  });
+});
+await new Promise((r) => smtp.listen(0, "127.0.0.1", r));
+const SMTP = { host: "127.0.0.1", port: smtp.address().port, secure: false, user: "me@test.dev", pass: "app pass", to: "owner@test.dev" };
+const mailText = (m) => Buffer.from(m.split("\n\n").slice(1).join("").replace(/\s+/g, ""), "base64").toString("utf8");
+
+await test("problem reports: the email sender works, and says when the App Password is wrong", async () => {
+  const { sendMail } = await import("../src/reports.js");
+  await sendMail(SMTP, "Hello ✓", "Body text here");
+  assert.match(mails.at(-1), /Subject: =\?UTF-8\?B\?/);
+  assert.equal(mailText(mails.at(-1)), "Body text here");
+  await assert.rejects(sendMail({ ...SMTP, pass: "nope" }, "x", "y"), /wrong address or App Password/);
+});
+await test("problem reports: from any app (even signed out), repeats counted, people's own sent at once", async () => {
+  for (let i = 0; i < 2; i++) assert.equal((await call("POST", "/api/report", { source: "web", kind: "app error", message: "x is undefined", detail: "at foo" }, null)).status, 200);
+  let list = (await call("GET", "/api/control/reports")).body;
+  assert.equal(list.reports.length, 1); assert.equal(list.reports[0].count, 2);
+  assert.equal(list.mail.hasPass, false);
+  srv.db.setSetting("mail", SMTP); // (the Control Room saves the same, without `secure`)
+  const before = mails.length;
+  await call("POST", "/api/report", { source: "android", kind: "user", message: "The TV stops after 10 minutes", device: "Android TV" });
+  for (let i = 0; i < 30 && mails.length === before; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(mails.length, before + 1, "emailed straight away");
+  const text = mailText(mails.at(-1));
+  assert.match(text, /Someone reported a problem in android/); assert.match(text, /The TV stops after 10 minutes/); assert.match(text, /profile Ana/);
+  assert.match(text, /x is undefined/); // (the earlier automatic one goes along)
+  list = (await call("GET", "/api/control/reports")).body;
+  assert.ok(list.reports.every((r) => r.sent)); assert.equal(list.mail.hasPass, true); assert.equal(JSON.stringify(list).includes("app pass"), false);
+  assert.equal((await call("POST", "/api/control/reports/test")).status, 200);
+  assert.match(mailText(mails.at(-1)), /It works/);
+  assert.equal((await call("GET", "/api/control/reports", null, kidToken)).status, 403);
+});
+smtp.close();
+
 await test("the web app is served, files outside it aren't", async () => {
   const r = await fetch(`${base}/`);
   assert.equal(r.status, 200);

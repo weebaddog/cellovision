@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         server = Server(this)
+        catchCrashes()
         root = FrameLayout(this)
         root.setBackgroundColor(Color.rgb(11, 11, 16))
         root.setOnApplyWindowInsetsListener { v, insets ->
@@ -56,6 +57,21 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() { super.onPause(); CookieManager.getInstance().flush() }
+
+    /** A crash is written down as the app closes, and sent to the server the next time it opens. */
+    private fun catchCrashes() {
+        val file = java.io.File(filesDir, "crash.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching { file.writeText("${e.javaClass.name}: ${e.message}\n${android.util.Log.getStackTraceString(e)}") }
+            previous?.uncaughtException(t, e)
+        }
+        if (file.exists()) {
+            val text = runCatching { file.readText() }.getOrDefault("")
+            file.delete()
+            Thread { server.report("crash", text.lineSequence().firstOrNull() ?: "The app crashed", text) }.start()
+        }
+    }
 
     // ---- choosing a server ------------------------------------------------------------------------
 

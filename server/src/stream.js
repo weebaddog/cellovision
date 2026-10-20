@@ -109,7 +109,7 @@ function videoArgs(enc, height) {
 
 const esc = (p) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 
-export function createStreamer({ cacheDir, log = console.log, encoderSetting = () => "auto" }) {
+export function createStreamer({ cacheDir, log = console.log, encoderSetting = () => "auto", onFail = () => {} }) {
   const sessions = new Map();
   const hlsDir = path.join(cacheDir, "hls");
   fs.rmSync(hlsDir, { recursive: true, force: true });
@@ -169,7 +169,7 @@ export function createStreamer({ cacheDir, log = console.log, encoderSetting = (
     let err = "";
     proc.stderr.on("data", (d) => { err = (err + d).slice(-2000); });
     const s = { id, itemId: item.id, owner, dir, proc, start, mode: plan.mode, encoder: enc, touched: Date.now(), done: false, failed: null, title: item.title, startedAt: Date.now() };
-    proc.on("exit", (code) => { s.done = true; if (code && code !== 255 && sessions.has(id)) { s.failed = err.trim().split("\n").pop() || `ffmpeg exit ${code}`; log(`[play] ${item.title}: ${s.failed}`); } });
+    proc.on("exit", (code) => { s.done = true; if (code && code !== 255 && sessions.has(id)) { s.failed = err.trim().split("\n").pop() || `ffmpeg exit ${code}`; log(`[play] ${item.title}: ${s.failed}`); onFail(item.title, s.failed); } });
     sessions.set(id, s);
     return s;
   }

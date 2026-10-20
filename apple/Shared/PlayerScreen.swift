@@ -48,6 +48,7 @@ final class PlayerModel {
     private var queue: [String] = []
     private var observer: Any?
     private var endObserver: NSObjectProtocol?
+    private var failObserver: NSObjectProtocol?
     private var lastReport = Date.distantPast
 
     @MainActor
@@ -81,7 +82,11 @@ final class PlayerModel {
             self.player = player
             watch(player)
             player.play()
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            let msg = "\(id): \(error.localizedDescription)"
+            Task { await api.report("playback failed", msg) }
+        }
     }
 
     private var position: Double { offset + (player?.currentTime().seconds.isFinite == true ? player!.currentTime().seconds : 0) }
@@ -93,6 +98,13 @@ final class PlayerModel {
         }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.ended() }
+        }
+        failObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] note in
+            guard let self, let api = self.api else { return }
+            let err = (note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?.localizedDescription ?? "unknown"
+            let msg = "\(self.item?.0.title ?? self.itemId): \(err)"
+            let detail = "mode \(self.plan?.mode ?? "?")"
+            Task { await api.report("playback failed", msg, detail) }
         }
     }
 
@@ -123,6 +135,7 @@ final class PlayerModel {
     private func cleanUp() {
         if let o = observer { player?.removeTimeObserver(o); observer = nil }
         if let e = endObserver { NotificationCenter.default.removeObserver(e); endObserver = nil }
+        if let e = failObserver { NotificationCenter.default.removeObserver(e); failObserver = nil }
     }
 
     func stop() {
