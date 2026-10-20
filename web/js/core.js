@@ -23,7 +23,7 @@ export function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
-export class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
+export class ApiError extends Error { constructor(message, status, data = null) { super(message); this.status = status; this.data = data; } }
 
 export async function api(method, path, body) {
   const headers = { "content-type": "application/json", "x-cellovision": "1" };
@@ -32,7 +32,9 @@ export async function api(method, path, body) {
   const r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin" });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && !path.startsWith("/api/signin")) { window.dispatchEvent(new Event("cv-signed-out")); throw new ApiError("Sign in", 401); }
-  if (!r.ok) throw new ApiError(data.error || `Error ${r.status}`, r.status);
+  // The CelloCloud plan doesn't include Cellovision now: the app shows the lock page (app.js).
+  if (r.status === 423 && data.locked) window.dispatchEvent(new CustomEvent("cv-locked", { detail: data }));
+  if (!r.ok) throw new ApiError(data.error || `Error ${r.status}`, r.status, data);
   return data;
 }
 
@@ -55,7 +57,7 @@ export function toast(msg, bad = false) {
   setTimeout(() => t.remove(), 3500);
 }
 export async function act(fn, ok) {
-  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { if (e.status !== 401) toast(e.message, true); }
+  try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { if (e.status !== 401 && e.status !== 423) toast(e.message, true); }
 }
 
 export function sheet(title, build) {

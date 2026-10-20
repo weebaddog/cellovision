@@ -44,7 +44,7 @@ const SCHEMA = [
 ];
 
 // Settings that hold secrets: stored encrypted (secrets.js), never as plain text.
-const SECRET_SETTINGS = new Set(["mail", "tmdbKey"]);
+const SECRET_SETTINGS = new Set(["mail", "tmdbKey", "cloudToken"]);
 
 export function openDb(dir) {
   fs.mkdirSync(dir, { recursive: true });

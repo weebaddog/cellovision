@@ -21,6 +21,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -120,6 +121,8 @@ class PlayerActivity : Activity() {
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { report() }
             override fun onPlayerError(error: PlaybackException) {
+                // The server locked (the CelloCloud plan doesn't include Cellovision now): say so and stop.
+                lockedMessage(error)?.let { Toast.makeText(this@PlayerActivity, it, Toast.LENGTH_LONG).show(); finish(); return }
                 val p = plan ?: return
                 val title = item?.optString("title") ?: itemId
                 Thread { server.report("playback failed", "$title: ${error.errorCodeName}", "mode ${p.optString("mode")}\n${error.message}\n${android.util.Log.getStackTraceString(error)}") }.start()
@@ -132,11 +135,23 @@ class PlayerActivity : Activity() {
                                 .put("start", position()).put("hlsStart", position()).put("force", "convert")
                             val np = server.call("POST", "/api/play", body.toString())
                             runOnUiThread { plan = np; play(np) }
-                        }.onFailure { runOnUiThread { Toast.makeText(this@PlayerActivity, error.message, Toast.LENGTH_LONG).show(); finish() } }
+                        }.onFailure { e -> runOnUiThread { Toast.makeText(this@PlayerActivity, e.message ?: error.message, Toast.LENGTH_LONG).show(); finish() } }
                     }.start()
                 } else { Toast.makeText(this@PlayerActivity, "Playback problem: ${error.errorCodeName}", Toast.LENGTH_LONG).show() }
             }
         })
+    }
+
+    /** The server's words when it refused with 423 (locked: see server/src/cloud.js), else null. */
+    private fun lockedMessage(error: PlaybackException): String? {
+        var c: Throwable? = error
+        while (c != null) {
+            if (c is HttpDataSource.InvalidResponseCodeException && c.responseCode == 423)
+                return runCatching { JSONObject(String(c.responseBody)).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() }
+                    ?: "Cellovision is locked: the CelloCloud plan doesn't include it right now."
+            c = c.cause
+        }
+        return null
     }
 
     private fun position(): Double = offset + (player?.currentPosition ?: 0) / 1000.0

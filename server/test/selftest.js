@@ -10,6 +10,8 @@ import { FF, run, probe } from "../src/probe.js";
 import { parseMovie, parseEpisode, seasonOf, showNameOf } from "../src/names.js";
 import { decide } from "../src/stream.js";
 import { ageOf } from "../src/meta.js";
+import { authKeyFor } from "../src/cloud.js";
+import { startFakeCloud } from "./fake-cellocloud.js";
 
 process.removeAllListeners("warning");
 let passed = 0, failed = 0;
@@ -55,6 +57,18 @@ await test("Fit to Device decisions", () => {
   assert.equal(decide({ ...h264mp4, streams: [...h264mp4.streams, { index: 3, type: "subtitle", codec: "hdmv_pgs_subtitle", text: false }] }, web, { sub: 3 }).mode, "convert");
 });
 
+console.log("CelloCloud sign-in");
+await test("the auth key is PBKDF2-SHA256 bytes 32..63, same as CelloCloud's own apps (known vector)", async () => {
+  // From cellocloud/android/app/src/test/resources/vectors.json (made by CelloCloud's web crypto).
+  const password = "Tëst pässwörd ﬁ 10+", salt = "f46f5892d1d76fae3d90b4f2e332429b";
+  const want = "850e3df52c4b5c52d0d82fc2edf38ba401bb10d6995bbc57f97b14ffdac1e618";
+  assert.equal(await authKeyFor(password, salt), want);
+  const crypto = await import("node:crypto");
+  const node = crypto.pbkdf2Sync(Buffer.from(password.normalize("NFKC"), "utf8"), Buffer.from(salt, "hex"), 600_000, 64, "sha256");
+  assert.equal(node.subarray(32).toString("hex"), want);
+  assert.notEqual(node.subarray(0, 32).toString("hex"), want); // (the file-key half is never what's sent)
+});
+
 // ---- sample media --------------------------------------------------------------------------
 
 console.log("making sample media with ffmpeg…");
@@ -83,7 +97,11 @@ await ff(["-f", "lavfi", "-i", "color=c=orange:size=640x480", "-frames:v", "1", 
 
 console.log("server");
 const dataDir = path.join(tmp, "data");
-const srv = await createServer({ dataDir, log: () => {}, fetchImpl: async () => { throw new Error("offline"); } });
+// A pretend CelloCloud. The first address asked is dead (like cellosig.com when the internet is
+// down), so every answer also proves the fall-back to the second address (the owner's PC).
+const fakeCloud = await startFakeCloud({ accounts: { carol: { password: "carol's long password" }, dave: { password: "dave's long password", totp: "123456" } } });
+const deadUrl = await (async () => { const s = (await import("node:net")).createServer(); await new Promise((r) => s.listen(0, "127.0.0.1", r)); const u = `http://127.0.0.1:${s.address().port}`; await new Promise((r) => s.close(r)); return u; })();
+const srv = await createServer({ dataDir, log: () => {}, fetchImpl: async () => { throw new Error("offline"); }, cloud: { bases: [deadUrl, fakeCloud.url] } });
 const PORT = 18420;
 const TLS_PORT = 18443;
 await srv.listen(PORT, "127.0.0.1", TLS_PORT);
@@ -104,6 +122,31 @@ await test("first set-up makes the admin profile", async () => {
   const me = await call("GET", "/api/me");
   assert.equal(me.body.name, "Ana"); assert.equal(me.body.admin, true);
   assert.equal((await call("GET", "/api/hello")).body.name, "Home");
+});
+await test("a fresh server is locked until its owner signs in with CelloCloud", async () => {
+  const hello = (await call("GET", "/api/hello", null, null)).body;
+  assert.equal(hello.cloud.locked, true); assert.equal(hello.cloud.reason, "signed_out"); assert.match(hello.cloud.message, /CelloCloud/);
+  const home = await call("GET", "/api/home");
+  assert.equal(home.status, 423); assert.equal(home.body.locked, true); assert.equal(home.body.error, hello.cloud.message);
+  assert.equal((await call("GET", "/api/me")).status, 200, "the account still answers");
+  assert.equal((await call("GET", "/api/control")).body.cloud.signedIn, false, "…and the Control Room");
+});
+await test("CelloCloud sign-in: only the auth key leaves the server; wrong password; the token is sealed", async () => {
+  const bad = await call("POST", "/api/cloud/login", { username: "carol", password: "wrong" });
+  assert.equal(bad.status, 400); assert.match(bad.body.error, /Wrong CelloCloud username or password/); assert.equal(bad.body.code, "wrong_login");
+  const r = await call("POST", "/api/cloud/login", { username: " Carol ", password: "carol's long password" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.username, "carol"); assert.equal(r.body.locked, false); assert.equal(r.body.plan, "plus700");
+  const sent = fakeCloud.logins.at(-1);
+  assert.deepEqual(Object.keys(sent).sort(), ["app", "authKey", "device", "username"]);
+  assert.match(sent.authKey, /^[0-9a-f]{64}$/); assert.equal(sent.app, "cellovision"); assert.equal(sent.device, os.hostname().slice(0, 60));
+  const raw = srv.db.all("SELECT key, value FROM settings");
+  assert.match(raw.find((x) => x.key === "cloudToken").value, /^enc:v1:/, "token stored sealed");
+  assert.equal(JSON.stringify(raw).includes("carol's long password"), false, "the password is never kept");
+  assert.equal(JSON.stringify(raw).includes(sent.authKey), false, "nor the auth key");
+  assert.equal(JSON.stringify((await call("GET", "/api/control")).body).includes("ca_"), false, "the token isn't shown");
+  assert.equal((await call("GET", "/api/hello", null, null)).body.cloud.locked, false);
+  assert.equal((await call("GET", "/api/home")).status, 200, "allowed: the library answers");
 });
 await test("sign in, wrong password, signed-out requests", async () => {
   assert.equal((await call("POST", "/api/signin", { name: "Ana", password: "nope" }, null)).status, 403);
@@ -395,6 +438,90 @@ await test("problem reports: from any app (even signed out), repeats counted, pe
   assert.equal((await call("GET", "/api/control/reports", null, kidToken)).status, 403);
 });
 smtp.close();
+
+console.log("CelloCloud plan lock");
+const recheck = async () => (await call("POST", "/api/cloud/check")).body;
+const setCloud = (fn) => { const s = srv.db.setting("cloud"); fn(s); srv.db.setSetting("cloud", s); };
+await test("a failed payment: warning while lockAt is ahead, everything still plays", async () => {
+  const at = Date.now() + 3 * 86400_000;
+  fakeCloud.access = { allowed: true, reason: "ok", message: null, lockAt: at };
+  const c = await recheck();
+  assert.equal(c.locked, false); assert.equal(c.lockAt, at);
+  assert.equal((await call("GET", "/api/hello", null, null)).body.cloud.lockAt, at);
+  assert.equal((await call("GET", "/api/home")).status, 200);
+});
+await test("payment_failed: every library and media request gets 423 with the message; hello and the Control Room still answer", async () => {
+  const message = "Your CelloCloud payment failed 3 days ago, so Cellovision is locked. Update your card on cellosig.com.";
+  fakeCloud.access = { allowed: false, reason: "payment_failed", message, lockAt: Date.now() - 1000 };
+  const c = await recheck();
+  assert.equal(c.locked, true); assert.equal(c.reason, "payment_failed");
+  for (const [m, p, b] of [["GET", "/api/home"], ["GET", `/api/item?id=${ids.Heat}`], ["GET", "/api/search?q=heat"], ["POST", "/api/play", { id: ids.Heat, caps: WEB }], ["GET", "/api/media-token"], ["GET", `/api/img/${ids.Heat}/poster`]]) {
+    const r = await call(m, p, b);
+    assert.equal(r.status, 423, `${m} ${p}`); assert.equal(r.body.error, message); assert.equal(r.body.message, message); assert.equal(r.body.reason, "payment_failed");
+  }
+  assert.equal((await call("GET", `/api/file/${ids.Heat}?t=${token}`, null, null)).status, 423, "files by URL too");
+  assert.equal((await call("GET", "/api/home", null, kidToken)).status, 423, "every profile");
+  const hello = (await call("GET", "/api/hello", null, null)).body;
+  assert.equal(hello.cloud.locked, true); assert.equal(hello.cloud.message, message); assert.equal(hello.cloud.reason, "payment_failed");
+  assert.equal(JSON.stringify(hello).includes("carol"), false, "hello doesn't name the CelloCloud account");
+  assert.equal((await call("GET", "/api/control")).status, 200);
+  assert.equal((await call("GET", "/api/me")).status, 200);
+  assert.equal((await call("POST", "/api/cloud/check", null, kidToken)).status, 403, "only admins press Check again");
+});
+await test("fixed: Check again unlocks", async () => {
+  fakeCloud.access = { allowed: true, reason: "ok", message: null, lockAt: null };
+  assert.equal((await recheck()).locked, false);
+  assert.equal((await call("GET", "/api/home")).status, 200);
+});
+await test("offline: the last answer still counts (one failed check never locks)", async () => {
+  fakeCloud.offline = true;
+  const c = await recheck();
+  assert.equal(c.locked, false); assert.match(c.lastError, /Can't reach CelloCloud/);
+  assert.equal((await call("GET", "/api/home")).status, 200);
+});
+await test("offline for 14 days: locked, asking to connect to the internet", async () => {
+  setCloud((s) => { s.fetchedAt = Date.now() - 15 * 86400_000; });
+  const c = await recheck();
+  assert.equal(c.locked, true); assert.equal(c.reason, "offline");
+  const r = await call("GET", "/api/home");
+  assert.equal(r.status, 423); assert.equal(r.body.error, "Connect to the internet so Cellovision can check your CelloCloud plan.");
+});
+await test("offline after lockAt has passed: locked", async () => {
+  setCloud((s) => { s.fetchedAt = Date.now() - 86400_000; s.access.lockAt = Date.now() - 60_000; });
+  const c = await recheck();
+  assert.equal(c.locked, true); assert.equal(c.reason, "payment_failed");
+  assert.equal((await call("GET", "/api/home")).status, 423);
+  fakeCloud.offline = false;
+  assert.equal((await recheck()).locked, false, "back online, the server's answer (allowed) wins");
+});
+await test("signed out from CelloCloud: locked until signed in again; two-step code", async () => {
+  fakeCloud.tokens.clear();
+  const c = await recheck();
+  assert.equal(c.locked, true); assert.equal(c.reason, "signed_out"); assert.equal(c.signedIn, false);
+  assert.equal(srv.db.setting("cloudToken"), null, "the dead token is forgotten");
+  const first = await call("POST", "/api/cloud/login", { username: "dave", password: "dave's long password" });
+  assert.equal(first.status, 400); assert.equal(first.body.code, "totp_required");
+  assert.equal((await call("POST", "/api/cloud/login", { username: "dave", password: "dave's long password", totp: "000000" })).body.code, "wrong_code");
+  const ok = await call("POST", "/api/cloud/login", { username: "dave", password: "dave's long password", totp: "123 456" });
+  assert.equal(ok.status, 200); assert.equal(ok.body.username, "dave"); assert.equal(ok.body.locked, false);
+  assert.equal((await call("GET", "/api/home")).status, 200);
+});
+await test("Sign out of CelloCloud from the Control Room: locked; sign in again", async () => {
+  const before = fakeCloud.logouts;
+  const r = (await call("POST", "/api/cloud/logout")).body;
+  assert.equal(r.locked, true); assert.equal(r.signedIn, false); assert.equal(fakeCloud.logouts, before + 1);
+  assert.equal((await call("GET", "/api/home")).status, 423);
+  assert.equal((await call("POST", "/api/cloud/login", { username: "carol", password: "carol's long password" })).status, 200);
+  assert.equal((await call("GET", "/api/home")).status, 200);
+});
+await test("CelloCloud unreachable while signing in: a clear message", async () => {
+  fakeCloud.offline = true;
+  const r = await call("POST", "/api/cloud/login", { username: "carol", password: "carol's long password" });
+  assert.equal(r.status, 503); assert.match(r.body.error, /Can't reach CelloCloud/);
+  fakeCloud.offline = false;
+  assert.equal((await call("GET", "/api/home")).status, 200, "the old sign-in is untouched");
+});
+fakeCloud.close();
 
 await test("the web app is served, files outside it aren't", async () => {
   const r = await fetch(`${base}/`);

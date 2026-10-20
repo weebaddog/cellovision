@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "../src/main.js";
 import { FF, run } from "../src/probe.js";
+import { startFakeCloud } from "./fake-cellocloud.js";
 
 process.removeAllListeners("warning");
 const root = path.join(os.tmpdir(), "cellovision-demo");
@@ -44,8 +45,17 @@ if (!fs.existsSync(path.join(root, ".made"))) {
   fs.writeFileSync(path.join(root, ".made"), "1");
 }
 
+// A pretend CelloCloud (so the demo doesn't need a real account). To see the plan lock:
+//   CELLOVISION_DEMO_PLAN=warning   (a payment failed: banner)   or   =locked   (payment_failed: lock page)
+const cloudAcct = { username: "demo", password: "demo-cloud-pass" };
+const fakeCloud = await startFakeCloud({ accounts: { [cloudAcct.username]: { password: cloudAcct.password } } });
+const plan = process.env.CELLOVISION_DEMO_PLAN;
+if (plan === "warning") fakeCloud.access = { allowed: true, reason: "ok", message: null, lockAt: Date.now() + 3 * 86400_000 };
+if (plan === "locked") fakeCloud.access = { allowed: false, reason: "payment_failed", message: "Your CelloCloud payment didn't go through and wasn't fixed within 3 days, so Cellovision is locked. Update your card on cellosig.com.", lockAt: Date.now() - 1000 };
+
 const fresh = !fs.existsSync(path.join(root, "data"));
-const srv = await createServer({ dataDir: path.join(root, "data"), log: console.log });
+const srv = await createServer({ dataDir: path.join(root, "data"), log: console.log, cloud: { bases: [fakeCloud.url] } });
+await srv.cloud.signIn(cloudAcct); // (the pretend CelloCloud forgets its sign-ins between runs)
 if (fresh) {
   const id = srv.auth.create({ name: "Demo", password: "demo-pass", admin: true });
   srv.auth.create({ name: "Kid", maxAge: 10 });
@@ -56,4 +66,4 @@ if (fresh) {
 }
 await srv.scanner.scan();
 await srv.listen(Number(process.env.CELLOVISION_PORT || 8421), "0.0.0.0", 8444);
-console.log("Demo: http://localhost:8421  (Demo / demo-pass, or Kid)");
+console.log(`Demo: http://localhost:8421  (Demo / demo-pass, or Kid) · pretend CelloCloud ${fakeCloud.url} (${cloudAcct.username} / ${cloudAcct.password})`);

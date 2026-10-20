@@ -22,6 +22,7 @@ import { createApi } from "./api.js";
 import { FF } from "./probe.js";
 import { createReports } from "./reports.js";
 import { loadCertificate } from "./tls.js";
+import { createCloud } from "./cloud.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "server", "package.json"), "utf8")).version;
@@ -32,7 +33,8 @@ export function defaultDataDir() {
   return path.join(os.homedir(), ".local", "share", "cellovision");
 }
 
-export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fetch, log = console.log } = {}) {
+/** cloud: { bases, fetchImpl, now } overrides where CelloCloud is asked (tests and the demo). */
+export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fetch, log = console.log, cloud: cloudOpts = {} } = {}) {
   const db = openDb(dataDir);
   db.dataDir = dataDir;
   const cacheDir = path.join(dataDir, "cache");
@@ -47,7 +49,9 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
   const tlsPort = Number(process.env.CELLOVISION_TLS_PORT || 8424); // (not 8443: CelloCloud uses that)
   let securePort = tlsPort; // (the one actually listened on)
   const tls = loadCertificate(dataDir);
-  const handle = createApi({ db, auth, lib, scanner, streamer, images, reports, webDir: path.join(ROOT, "web"), version: VERSION, log, tls: { fingerprint: tls.fingerprint, port: () => securePort } });
+  const cloud = createCloud({ db, log, ...cloudOpts });
+  cloud.start();
+  const handle = createApi({ db, auth, lib, scanner, streamer, images, reports, cloud, webDir: path.join(ROOT, "web"), version: VERSION, log, tls: { fingerprint: tls.fingerprint, port: () => securePort } });
   const server = http.createServer(handle);
   const secure = https.createServer({ cert: tls.cert, key: tls.key }, handle);
   for (const s of [server, secure]) { s.keepAliveTimeout = 65_000; s.requestTimeout = 0; } // (long streams)
@@ -61,7 +65,7 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
   chores.unref();
 
   return {
-    db, auth, lib, scanner, streamer, reports, server, secure, fingerprint: tls.fingerprint,
+    db, auth, lib, scanner, streamer, reports, cloud, server, secure, fingerprint: tls.fingerprint,
     async listen(port = Number(process.env.CELLOVISION_PORT || 8420), host = "0.0.0.0", httpsPort = tlsPort) {
       await new Promise((ok, bad) => server.once("error", bad).listen(port, host, ok));
       // A busy HTTPS port (another program has it) leaves the server on plain HTTP rather than not starting.
@@ -69,7 +73,7 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
       catch (e) { securePort = null; log(`[cellovision] HTTPS port ${httpsPort} is busy (${e.code || e.message}): plain HTTP only. Set CELLOVISION_TLS_PORT to another port.`); }
       log(`[cellovision] ${VERSION} on port ${port} (http)${securePort ? ` and ${securePort} (https, ${tls.fingerprint})` : ""} · data in ${dataDir} · ffmpeg ${FF.ffmpeg}`);
     },
-    close() { clearInterval(chores); streamer.stopAll(); for (const s of [server, secure]) { s.close(); s.closeAllConnections?.(); } db.close(); },
+    close() { clearInterval(chores); cloud.stop(); streamer.stopAll(); for (const s of [server, secure]) { s.close(); s.closeAllConnections?.(); } db.close(); },
   };
 }
 

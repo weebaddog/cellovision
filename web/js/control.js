@@ -1,6 +1,7 @@
 // The Control Room: what's playing, shelves, profiles, settings and what happened. Admins only.
 
 import { h, api, act, sheet, confirmBox, go, fmtTime } from "./core.js";
+import { cloudSection } from "./cloud.js";
 
 const KINDS = [["movies", "🎬 Movies"], ["shows", "📺 Shows"], ["music", "🎵 Music"], ["photos", "🖼 Photos"], ["videos", "📹 Home videos"]];
 const AGES = [[null, "No limit"], [0, "Everyone (G, TV-Y, TV-G)"], [7, "7 and up (TV-Y7)"], [10, "10 and up (PG, TV-PG)"], [13, "13 and up (PG-13)"], [14, "14 and up (TV-14)"], [16, "16 and up"], [17, "17 and up (R, TV-MA)"]];
@@ -13,6 +14,8 @@ export async function controlPage() {
     h("h1", {}, "Control Room"),
     h("p", { class: "muted" }, `${c.serverName} · Cellovision ${c.version} · data in ${c.dataDir}`),
     nowBlock(c),
+    c.cloud ? h("section", { class: "row" }, h("h2", {}, "CelloCloud account"),
+      cloudSection(c.cloud, (r) => { if (r.locked) window.dispatchEvent(new CustomEvent("cv-locked", { detail: r })); })) : null,
     shelvesBlock(c),
     profilesBlock(c),
     settingsBlock(c),

@@ -14,7 +14,12 @@ const SHELF_KINDS = ["movies", "shows", "music", "photos", "videos"];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
-export function createApi({ db, auth, lib, scanner, streamer, images, reports, webDir, version, log = console.log, tls = null }) {
+// While the CelloCloud plan doesn't include Cellovision (cloud.js), only these signed-in routes
+// answer (plus the open ones above them: hello, setup, sign-in…): the Control Room and the account.
+const WHEN_LOCKED = new Set(["POST /api/signout", "GET /api/me", "GET /api/me/devices", "DELETE /api/me/devices", "POST /api/pair/approve"]);
+const allowedWhenLocked = (key) => WHEN_LOCKED.has(key) || / \/api\/(control|cloud)(\/|$)/.test(key);
+
+export function createApi({ db, auth, lib, scanner, streamer, images, reports, cloud = null, webDir, version, log = console.log, tls = null }) {
   const nowPlaying = new Map(); // token hash → { profile, device, item, position, paused, at, mode }
   const reportsFrom = new Map(); // ip → [times] (problem reports: at most 30 an hour from one address)
 
@@ -76,13 +81,26 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
     return lib.setMark(me.id, i.id, m);
   }
 
+  /** The lock as every app sees it (no account details). */
+  function publicLock() {
+    const s = cloud.status();
+    return { locked: s.locked, reason: s.reason, message: s.message, lockAt: s.lockAt, signedIn: s.signedIn };
+  }
+  function lockedError() {
+    const s = publicLock();
+    // `error` is the plain message, so every app (also older ones) shows it as it is.
+    return Object.assign(new Error(s.message), { status: 423, extra: { locked: true, reason: s.reason, message: s.message, lockAt: s.lockAt } });
+  }
+
   // ---- routes --------------------------------------------------------------------------------
 
   const open = {
     "GET /api/hello": () => ({ name: db.setting("serverName", `${os.hostname()} Cellovision`), version, setUp: auth.count() > 0,
       // HTTPS: where, and the certificate's fingerprint (apps trust it once, then accept only it).
       https: tls?.port() ? { port: tls.port(), fingerprint: tls.fingerprint } : null, plainHttp: db.setting("plainHttp", true),
-      profiles: auth.profiles().map((p) => ({ id: p.id, name: p.name, hasPassword: !!p.has_password })) }),
+      profiles: auth.profiles().map((p) => ({ id: p.id, name: p.name, hasPassword: !!p.has_password })),
+      // The CelloCloud plan: locked or not (and why), and the date a failed payment locks it.
+      cloud: cloud ? publicLock() : null }),
     "POST /api/setup": async (req, res) => {
       if (auth.count() > 0) throw fail(409, "Already set up");
       const b = await body(req);
@@ -225,6 +243,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         activity: db.all("SELECT * FROM activity ORDER BY id DESC LIMIT 60"),
         settings: { tmdbKey: db.setting("tmdbKey") ? "set" : "", encoder: db.setting("encoder", "auto"), scanEvery: db.setting("scanEvery", 6), plainHttp: db.setting("plainHttp", true) },
         https: tls?.port() ? { port: tls.port(), fingerprint: tls.fingerprint } : null,
+        cloud: cloud ? cloud.info() : null,
       };
     },
     "POST /api/control/shelves": async (req, res, me) => {
@@ -286,6 +305,23 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
       return { ok: true };
     },
     // Problem reports: the list, and where they're emailed.
+    // CelloCloud account (one per server): sign in, check the plan again, sign out.
+    "GET /api/cloud": (req, res, me) => { admin(me); return cloud.info(); },
+    "POST /api/cloud/login": async (req, res, me) => {
+      admin(me);
+      const b = await body(req);
+      const r = await cloud.signIn({ username: b.username, password: b.password, totp: b.totp });
+      db.log("cloud", `${me.name} signed this server in to CelloCloud as ${r.username}.`, me.id);
+      return r;
+    },
+    "POST /api/cloud/check": async (req, res, me) => { admin(me); await cloud.check(); return cloud.info(); },
+    "POST /api/cloud/logout": async (req, res, me) => {
+      admin(me);
+      const r = await cloud.signOut();
+      db.log("cloud", `${me.name} signed this server out of CelloCloud.`, me.id);
+      return r;
+    },
+
     "GET /api/control/reports": (req, res, me) => { admin(me); return { reports: reports.list(), mail: reports.settings() }; },
     "PUT /api/control/reports": async (req, res, me) => { admin(me); reports.save(await body(req)); return { mail: reports.settings() }; },
     "POST /api/control/reports/test": async (req, res, me) => {
@@ -389,6 +425,8 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
       me.token = token;
       // Cookie sign-in (the web app) also needs this header on changes, so other sites can't send them.
       if (req.method !== "GET" && !String(req.headers.authorization || "").startsWith("Bearer ") && req.headers["x-cellovision"] !== "1") throw fail(403, "Missing header");
+      // The CelloCloud plan doesn't include Cellovision now: nothing from the library plays or shows.
+      if (cloud && !allowedWhenLocked(key) && cloud.status().locked) throw lockedError();
       if (req.method === "GET" || req.method === "HEAD") { const done = await media(req, res, me, url); if (done !== false) return; }
       const route = routes[key];
       if (!route) throw fail(404, "No such thing");
@@ -399,7 +437,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         log(`[api] ${req.method} ${url.pathname}: ${e.stack || e.message}`);
         reports?.add({ source: "server", kind: "server error", message: `${req.method} ${url.pathname}: ${e.message}`, detail: e.stack, version });
       }
-      if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the server" });
+      if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : "Something went wrong on the server", ...(e.status && e.extra ? e.extra : {}) });
       else res.end();
     }
   };

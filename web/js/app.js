@@ -6,6 +6,7 @@ import { homePage, shelfPage, itemPage, searchPage, heartsPage, setsPage, setPag
 import { controlPage } from "./control.js";
 import { enableTv } from "./tv.js";
 import { watchForErrors, reportSheet } from "./report.js";
+import { lockPage, paymentBanner } from "./cloud.js";
 
 watchForErrors();
 
@@ -19,12 +20,51 @@ async function start() {
   document.title = state.server.name;
   if (!state.server.setUp) return setupPage();
   try { state.me = await api("GET", "/api/me"); } catch { return signInPage(); }
-  // The phone/desktop wrappers (which sign in with a token) get a media-only token for picture and
-  // file URLs, so the account token never travels in a URL. A browser uses its cookie instead.
-  if (bearer()) { try { state.mediaToken = (await api("GET", "/api/media-token")).token; } catch { state.mediaToken = null; } }
-  shell();
+  await enter();
 }
 window.addEventListener("cv-signed-out", () => { state.me = null; signInPage(); });
+
+/** Signed in: the app, or the lock page while the CelloCloud plan doesn't include Cellovision. */
+async function enter() {
+  if (state.server.cloud?.locked) return showLock(state.server.cloud);
+  // The phone/desktop wrappers (which sign in with a token) get a media-only token for picture and
+  // file URLs, so the account token never travels in a URL. A browser uses its cookie instead.
+  if (bearer()) { try { state.mediaToken = (await api("GET", "/api/media-token")).token; } catch (e) { state.mediaToken = null; if (e.status === 423) return; } }
+  shell();
+}
+
+// ---- the CelloCloud plan lock ------------------------------------------------------------------
+
+let locked = false;
+function showLock(lock) {
+  locked = true;
+  // Stop whatever is playing (the server has stopped serving it anyway).
+  document.querySelectorAll("video, audio").forEach((m) => { try { m.pause(); } catch { /* gone */ } });
+  document.querySelectorAll(".player, .musicbar, .sheet-bg, .menu").forEach((el) => el.remove());
+  main = null;
+  lockPage(app, {
+    lock, me: state.me, serverName: state.server.name,
+    unlocked: async () => { locked = false; state.server = await api("GET", "/api/hello"); await enter(); },
+    switchProfile: async () => { locked = false; await api("POST", "/api/signout").catch(() => {}); state.me = null; state.server = await api("GET", "/api/hello"); signInPage(); },
+  });
+}
+window.addEventListener("cv-locked", (e) => {
+  if (!state.me || locked) return;
+  if (state.server) state.server.cloud = { ...(state.server.cloud || {}), locked: true, ...e.detail };
+  showLock(e.detail);
+});
+// While running: notice a lock (or a new warning) without anyone having to press anything.
+setInterval(async () => {
+  if (!state.me || document.hidden) return;
+  try {
+    const s = await api("GET", "/api/hello");
+    const was = state.server?.cloud;
+    state.server = s;
+    if (s.cloud?.locked && !locked) showLock(s.cloud);
+    else if (!s.cloud?.locked && locked) { locked = false; await enter(); }
+    else if (!locked && (was?.lockAt || null) !== (s.cloud?.lockAt || null)) drawBanner();
+  } catch { /* server away for a moment */ }
+}, 5 * 60_000);
 
 // ---- first set-up ------------------------------------------------------------------------------
 
@@ -35,10 +75,10 @@ function setupPage() {
   const err = h("p", { class: "muted", role: "alert" });
   app.replaceChildren(h("div", { class: "signin" },
     h("img", { class: "logo", src: "icon.svg", alt: "" }), h("h1", {}, "Welcome to Cellovision"),
-    h("p", { class: "muted" }, "Your own movies, shows, music and photos, on every screen. First, make your profile; it can run the Control Room."),
+    h("p", { class: "muted" }, "Your own movies, shows, music and photos, on every screen. First, make your profile; it can run the Control Room. Next, you'll sign this server in with your CelloCloud account (Cellovision comes with its 700 GB plan)."),
     h("form", { onsubmit: async (e) => {
       e.preventDefault(); err.textContent = "";
-      try { await api("POST", "/api/setup", { serverName: server.value, name: name.value, password: pass.value, device: navigator.userAgent.slice(0, 60), client: "web" }); await start(); location.hash = "#/control"; }
+      try { location.hash = "#/control"; await api("POST", "/api/setup", { serverName: server.value, name: name.value, password: pass.value, device: navigator.userAgent.slice(0, 60), client: "web" }); await start(); }
       catch (x) { err.textContent = x.message; }
     } },
       h("label", { class: "field" }, h("span", {}, "Name this server"), server),
@@ -80,7 +120,7 @@ function signInPage() {
 async function signIn(name, password) {
   await api("POST", "/api/signin", { name, password, web: true, device: deviceName(), client: "web" });
   state.me = await api("GET", "/api/me");
-  shell();
+  await enter();
 }
 const deviceName = () => { const u = navigator.userAgent; return /Android/.test(u) ? "Android browser" : /iPhone|iPad/.test(u) ? "iPhone browser" : /Windows/.test(u) ? "Windows browser" : /Mac/.test(u) ? "Mac browser" : /Linux/.test(u) ? "Linux browser" : "Browser"; };
 
@@ -96,7 +136,7 @@ async function pairCodeHere() {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       const r = await api("POST", "/api/pair/check", { code, secret });
-      if (r.approved) { await api("POST", "/api/session", { token: r.token }); document.querySelector(".sheet-bg")?.remove(); state.me = await api("GET", "/api/me"); shell(); return; }
+      if (r.approved) { await api("POST", "/api/session", { token: r.token }); document.querySelector(".sheet-bg")?.remove(); state.me = await api("GET", "/api/me"); await enter(); return; }
     } catch { break; }
   }
 }
@@ -115,7 +155,15 @@ function shell() {
   const bottom = h("nav", { class: "bottomnav" }, [["#/home", "Home", "⌂"], ["#/search", "Search", "🔍"], ["#/hearts", "Hearts", "♡"], ["#/mixtapes", "Mixtapes", "🎞"], ...(state.me.admin ? [["#/control", "Control", "⚙"]] : [])]
     .map(([href, label, ic]) => h("a", { href, "data-href": href }, h("span", {}, ic), label)));
   app.replaceChildren(top, main, bottom);
+  drawBanner();
   if (!location.hash || location.hash === "#/") location.hash = "#/home"; else route();
+}
+
+/** A failed CelloCloud payment that hasn't locked Cellovision yet: a warning above the page. */
+function drawBanner() {
+  app.querySelector(".cloud-banner")?.remove();
+  const b = paymentBanner(state.server?.cloud?.lockAt);
+  if (b && main) main.before(b);
 }
 
 function toggleMenu() {
@@ -190,11 +238,11 @@ async function route() {
   const r = ROUTES.find(([re]) => re.test(hash));
   try {
     const el = r ? await r[1](hash.match(r[0])) : h("div", { class: "empty" }, "Page not found.");
-    if (mine !== routing) return;
+    if (mine !== routing || !main) return;
     main.replaceChildren(el);
     window.scrollTo(0, 0);
   } catch (e) {
-    if (e.status !== 401 && mine === routing) main.replaceChildren(h("div", { class: "empty" }, e.message));
+    if (e.status !== 401 && e.status !== 423 && mine === routing && main) main.replaceChildren(h("div", { class: "empty" }, e.message));
   }
 }
 window.addEventListener("hashchange", route);
