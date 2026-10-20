@@ -2,7 +2,7 @@
 //   CELLOVISION_DATA   where the database, artwork and caches live
 //                      (default: %LOCALAPPDATA%\Cellovision on Windows, ~/.local/share/cellovision elsewhere)
 //   CELLOVISION_PORT   default 8420 (plain HTTP: discovery, and the iPhone/Apple TV apps)
-//   CELLOVISION_TLS_PORT default 8443 (HTTPS with the server's own certificate: everything else)
+//   CELLOVISION_TLS_PORT default 8424 (HTTPS with the server's own certificate: everything else)
 //   CELLOVISION_FFMPEG a folder holding ffmpeg and ffprobe (otherwise found automatically)
 
 import http from "node:http";
@@ -44,7 +44,7 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
   const reports = createReports({ db, version: VERSION, log });
   const streamer = createStreamer({ cacheDir, log, encoderSetting: () => db.setting("encoder", "auto"), onFail: (title, why) => reports.add({ source: "server", kind: "conversion failed", message: `${title}: ${why}`, version: VERSION }) });
   const images = createImages({ cacheDir });
-  const tlsPort = Number(process.env.CELLOVISION_TLS_PORT || 8443);
+  const tlsPort = Number(process.env.CELLOVISION_TLS_PORT || 8424); // (not 8443: CelloCloud uses that)
   let securePort = tlsPort; // (the one actually listened on)
   const tls = loadCertificate(dataDir);
   const handle = createApi({ db, auth, lib, scanner, streamer, images, reports, webDir: path.join(ROOT, "web"), version: VERSION, log, tls: { fingerprint: tls.fingerprint, port: () => securePort } });
@@ -64,9 +64,10 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
     db, auth, lib, scanner, streamer, reports, server, secure, fingerprint: tls.fingerprint,
     async listen(port = Number(process.env.CELLOVISION_PORT || 8420), host = "0.0.0.0", httpsPort = tlsPort) {
       await new Promise((ok, bad) => server.once("error", bad).listen(port, host, ok));
-      await new Promise((ok, bad) => secure.once("error", bad).listen(httpsPort, host, ok));
-      securePort = secure.address().port;
-      log(`[cellovision] ${VERSION} on port ${port} (http) and ${httpsPort} (https, ${tls.fingerprint}) · data in ${dataDir} · ffmpeg ${FF.ffmpeg}`);
+      // A busy HTTPS port (another program has it) leaves the server on plain HTTP rather than not starting.
+      try { await new Promise((ok, bad) => secure.once("error", bad).listen(httpsPort, host, ok)); securePort = secure.address().port; }
+      catch (e) { securePort = null; log(`[cellovision] HTTPS port ${httpsPort} is busy (${e.code || e.message}): plain HTTP only. Set CELLOVISION_TLS_PORT to another port.`); }
+      log(`[cellovision] ${VERSION} on port ${port} (http)${securePort ? ` and ${securePort} (https, ${tls.fingerprint})` : ""} · data in ${dataDir} · ffmpeg ${FF.ffmpeg}`);
     },
     close() { clearInterval(chores); streamer.stopAll(); for (const s of [server, secure]) { s.close(); s.closeAllConnections?.(); } db.close(); },
   };

@@ -15,7 +15,7 @@ const { signedRelease, newer, saveVerified, downloadUrl, installCommand, SITE } 
 
 const ICON = path.join(__dirname, "icon.png");
 if (process.env.CELLOVISION_PROFILE && !app.isPackaged) app.setPath("userData", process.env.CELLOVISION_PROFILE); // (testing)
-const PORT = 8420, TLS_PORT = 8443;
+const PORT = 8420, TLS_PORT = 8424;
 let win = null, tray = null, quitting = false, server = null, serverState = { running: false, error: null, ffmpeg: null, progress: null };
 
 const configFile = () => path.join(app.getPath("userData"), "config.json");

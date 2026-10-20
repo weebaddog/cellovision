@@ -81,7 +81,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
   const open = {
     "GET /api/hello": () => ({ name: db.setting("serverName", `${os.hostname()} Cellovision`), version, setUp: auth.count() > 0,
       // HTTPS: where, and the certificate's fingerprint (apps trust it once, then accept only it).
-      https: tls ? { port: tls.port(), fingerprint: tls.fingerprint } : null, plainHttp: db.setting("plainHttp", true),
+      https: tls?.port() ? { port: tls.port(), fingerprint: tls.fingerprint } : null, plainHttp: db.setting("plainHttp", true),
       profiles: auth.profiles().map((p) => ({ id: p.id, name: p.name, hasPassword: !!p.has_password })) }),
     "POST /api/setup": async (req, res) => {
       if (auth.count() > 0) throw fail(409, "Already set up");
@@ -222,7 +222,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         profiles: auth.profiles().map((p) => ({ ...p, admin: !!p.admin, shelves: j(p.shelves), hasPassword: !!p.has_password })),
         activity: db.all("SELECT * FROM activity ORDER BY id DESC LIMIT 60"),
         settings: { tmdbKey: db.setting("tmdbKey") ? "set" : "", encoder: db.setting("encoder", "auto"), scanEvery: db.setting("scanEvery", 6), plainHttp: db.setting("plainHttp", true) },
-        https: tls ? { port: tls.port(), fingerprint: tls.fingerprint } : null,
+        https: tls?.port() ? { port: tls.port(), fingerprint: tls.fingerprint } : null,
       };
     },
     "POST /api/control/shelves": async (req, res, me) => {
@@ -362,7 +362,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
   return async function handle(req, res) {
     const url = new URL(req.url, "http://cellovision");
     // Plain HTTP switched off: only "who are you?" answers there; everything else is HTTPS.
-    if (!req.socket.encrypted && tls && !db.setting("plainHttp", true) && url.pathname !== "/api/hello") {
+    if (!req.socket.encrypted && tls?.port() && !db.setting("plainHttp", true) && url.pathname !== "/api/hello") {
       if (!url.pathname.startsWith("/api/")) { res.writeHead(301, { location: `https://${String(req.headers.host || "localhost").replace(/:\d+$/, "")}:${tls.port()}${req.url}` }); return res.end(); }
       return json(res, 403, { error: "This server only takes HTTPS: update the app, or switch plain HTTP back on in the Control Room" });
     }
