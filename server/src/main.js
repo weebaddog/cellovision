@@ -75,6 +75,32 @@ export async function createServer({ dataDir = defaultDataDir(), fetchImpl = fet
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.removeAllListeners("warning").on("warning", (w) => { if (w.name !== "ExperimentalWarning") console.warn(w); });
+
+  // "reset-password": for the owner, on this computer, when a profile's password is forgotten.
+  //   node src/main.js reset-password                      → list the profiles
+  //   node src/main.js reset-password "Name"               → set a new random password (printed once)
+  //   node src/main.js reset-password "Name" "new pass"    → set that password
+  //   node src/main.js reset-password "Name" --clear       → remove the password (sign in with no password)
+  if (process.argv[2] === "reset-password") {
+    const crypto = await import("node:crypto");
+    const db = openDb(defaultDataDir());
+    const auth = createAuth(db);
+    const name = process.argv[3];
+    if (!name) {
+      const names = auth.profiles().map((p) => `  ${p.name}${p.admin ? " (admin)" : ""}${p.has_password ? "" : " — no password"}`);
+      console.log(`Profiles on this server:\n${names.join("\n")}\n\nTo reset one:  reset-password "Name" [new password]`);
+      process.exit(0);
+    }
+    const arg = process.argv[4];
+    const pass = arg === "--clear" ? null : (arg || crypto.randomBytes(9).toString("base64url"));
+    const ok = auth.setPassword(name, pass);
+    if (!ok) { console.error(`No profile named "${name}".`); process.exit(1); }
+    console.log(pass === null
+      ? `"${name}" now has no password — sign in and set a new one in the profile.`
+      : `"${name}" password is now:\n\n    ${pass}\n\nSign in with it, then change it in your profile. All of "${name}"'s devices were signed out.`);
+    process.exit(0);
+  }
+
   const s = await createServer();
   await s.listen();
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { s.close(); process.exit(0); });

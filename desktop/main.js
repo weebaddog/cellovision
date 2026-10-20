@@ -264,6 +264,36 @@ ipcMain.handle("cellovision:be-server", async (_e, on) => {
 });
 ipcMain.on("cellovision:theme", (_e, mode) => { config.theme = ["dark", "light", "auto"].includes(mode) ? mode : "dark"; saveConfig(); nativeTheme.themeSource = config.theme === "auto" ? "system" : config.theme; buildMenu(); });
 
+// ---- reset a forgotten password (only when the server runs here) -------------------------------
+
+function runReset(name, password) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [serverMain(), "reset-password", name, password], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true,
+    });
+    let err = ""; p.stderr.on("data", (d) => { err += d; });
+    p.on("exit", (code) => resolve(code === 0 ? null : (err.trim() || `reset failed (code ${code})`)));
+    p.on("error", (e) => resolve(e.message));
+  });
+}
+async function resetPasswordFlow() {
+  if (!serverState.running) { dialog.showMessageBox(win, { type: "info", title: "Cellovision", message: "This can only reset passwords on a server running on this computer.", detail: "Turn on “Run the server here” first, or reset it on the computer that runs the server." }); return; }
+  const info = await hello(`http://127.0.0.1:${PORT}`);
+  const names = (info?.profiles || []).map((p) => p.name);
+  if (!names.length) { dialog.showMessageBox(win, { type: "info", title: "Cellovision", message: "There are no profiles yet." }); return; }
+  const { response } = await dialog.showMessageBox(win, {
+    type: "question", title: "Reset a password", message: "Whose password should I reset?",
+    detail: "This gives that profile a new password and signs out its devices. Everything else stays.",
+    buttons: [...names, "Cancel"], cancelId: names.length,
+  });
+  if (response >= names.length) return;
+  const name = names[response];
+  const password = require("node:crypto").randomBytes(9).toString("base64url");
+  const err = await runReset(name, password);
+  if (err) { dialog.showMessageBox(win, { type: "error", title: "Cellovision", message: `Couldn't reset ${name}'s password.`, detail: err }); return; }
+  await dialog.showMessageBox(win, { type: "info", title: "New password for " + name, message: `${name}'s new password:\n\n${password}`, detail: `Sign in with it on any device, then change it in the profile. ${name}'s devices were signed out.` });
+}
+
 // ---- the window --------------------------------------------------------------------------------
 
 function show() { if (!win) return createWindow(); if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
@@ -301,6 +331,7 @@ function buildMenu() {
     { label: serverState.running ? `Server running on this computer (port ${PORT})` : "This computer isn't the server", enabled: false },
     serverState.running ? { label: "Open the Control Room", click: () => { show(); win.loadURL(`${isLocal(new URL(config.server || "http://x").hostname) ? config.server : `http://127.0.0.1:${PORT}`}/#/control`).catch(() => {}); } } : null,
     { label: "Change server…", click: () => { show(); setup({}); } },
+    serverState.running ? { label: "Reset a forgotten password…", click: resetPasswordFlow } : null,
     { type: "separator" },
     { label: "Theme", submenu: [["dark", "Dark"], ["light", "Light"], ["auto", "Auto"]].map(([k, l]) => ({ label: l, type: "radio", checked: theme === k, click: () => { config.theme = k; saveConfig(); nativeTheme.themeSource = k === "auto" ? "system" : k; win?.webContents.executeJavaScript(`window.CellovisionSetTheme && window.CellovisionSetTheme(${JSON.stringify(k)})`).catch(() => {}); buildMenu(); } })) },
     { label: "Start when I sign in", type: "checkbox", checked: !!config.autostart, click: (i) => setAutostart(i.checked) },

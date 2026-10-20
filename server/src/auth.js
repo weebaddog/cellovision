@@ -70,6 +70,15 @@ export function createAuth(db) {
     },
     signOut(token) { db.run("DELETE FROM sessions WHERE token_hash = ?", hash(token)); },
 
+    /** Set (or clear, with null) a profile's password and sign its devices out. For the owner's reset tool. */
+    setPassword(name, password) {
+      const p = db.get("SELECT id FROM profiles WHERE name = ? COLLATE NOCASE", name);
+      if (!p) return false;
+      db.run("UPDATE profiles SET pass_hash = ? WHERE id = ?", password ? hashPassword(password) : null, p.id);
+      db.run("DELETE FROM sessions WHERE profile_id = ?", p.id);
+      return true;
+    },
+
     /**
      * A short-lived, media-only token for the session behind `tokenHash`. It goes in media
      * addresses (pictures, files, streams) — where the account token must never go, because URLs
