@@ -25,6 +25,12 @@ export function createAuth(db) {
   const pairs = new Map(); // code → { secret, device, client, created, profileId }
   const failures = new Map();
 
+  // A media-only token (see mediaToken below) is signed with this per-server secret, made once.
+  const MEDIA_TTL = 7 * 86400_000;
+  let mediaSecret = db.setting("mediaSecret");
+  if (!mediaSecret) { mediaSecret = crypto.randomBytes(32).toString("base64"); db.setSetting("mediaSecret", mediaSecret); }
+  const mediaSign = (sid, exp) => crypto.createHmac("sha256", mediaSecret).update(`${sid}.${exp}`).digest("base64url");
+
   function newSession(profileId, device, client) {
     const token = crypto.randomBytes(32).toString("base64url");
     db.run("INSERT INTO sessions (token_hash, profile_id, device, client, created, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
@@ -64,6 +70,28 @@ export function createAuth(db) {
     },
     signOut(token) { db.run("DELETE FROM sessions WHERE token_hash = ?", hash(token)); },
 
+    /**
+     * A short-lived, media-only token for the session behind `tokenHash`. It goes in media
+     * addresses (pictures, files, streams) — where the account token must never go, because URLs
+     * end up in history and caches — but it can't sign in, change, or read anything but media.
+     */
+    mediaToken(tokenHash, ttl = MEDIA_TTL) { const exp = Date.now() + ttl; return `m1.${tokenHash}.${exp}.${mediaSign(tokenHash, exp)}`; },
+    /** The profile behind a media token (for media routes only), or null. */
+    whoMedia(mt) {
+      if (typeof mt !== "string") return null;
+      const parts = mt.split(".");
+      if (parts.length !== 4 || parts[0] !== "m1") return null;
+      const [, tokenHash, expStr, sig] = parts;
+      const exp = Number(expStr);
+      if (!/^[a-f0-9]{64}$/.test(tokenHash) || !Number.isFinite(exp) || exp < Date.now()) return null;
+      const want = mediaSign(tokenHash, exp);
+      const a = Buffer.from(sig), b = Buffer.from(want);
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+      const s = db.get(`SELECT p.id, p.name, p.admin, p.max_age, p.shelves, s.token_hash, s.device, s.client FROM sessions s JOIN profiles p ON p.id = s.profile_id WHERE s.token_hash = ?`, tokenHash);
+      if (!s) return null;
+      return { ...s, admin: !!s.admin, shelves: s.shelves ? JSON.parse(s.shelves) : null };
+    },
+
     // ---- Pair Code ------------------------------------------------------------------------------
     pairStart(device, client) {
       for (const [c, p] of pairs) if (Date.now() - p.created > PAIR_TTL) pairs.delete(c);
@@ -83,7 +111,8 @@ export function createAuth(db) {
     /** The TV asks (with its secret) whether its code was approved: a token once it is. */
     pairCheck(code, secret) {
       const p = pairs.get(code);
-      if (!p || p.secret !== secret || Date.now() - p.created > PAIR_TTL) throw Object.assign(new Error("Code ran out"), { status: 410 });
+      const ok = p && (() => { const a = Buffer.from(String(secret)), b = Buffer.from(String(p.secret)); return a.length === b.length && crypto.timingSafeEqual(a, b); })();
+      if (!ok || Date.now() - p.created > PAIR_TTL) throw Object.assign(new Error("Code ran out"), { status: 410 });
       if (!p.profileId) return { approved: false };
       pairs.delete(code);
       return { approved: true, token: newSession(p.profileId, p.device, p.client) };

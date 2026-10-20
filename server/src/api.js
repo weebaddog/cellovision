@@ -133,6 +133,8 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         latest: shelves.map((s) => ({ shelf: s, items: lib.latest(me, db.get("SELECT * FROM shelves WHERE id = ?", s.id)) })).filter((r) => r.items.length) };
     },
     "GET /api/shelves": (req, res, me) => ({ shelves: lib.shelves(me) }),
+    // A media-only token for this device to open pictures/files/streams by URL (not the account token).
+    "GET /api/media-token": (req, res, me) => ({ token: auth.mediaToken(me.token_hash) }),
     "GET /api/browse": (req, res, me, url) => lib.browse(me, shelfFor(me, url.searchParams.get("shelf")), Object.fromEntries(url.searchParams)),
     "GET /api/item": (req, res, me, url) => itemPage(me, itemFor(me, url.searchParams.get("id"))),
     "GET /api/search": (req, res, me, url) => ({ items: lib.search(me, url.searchParams.get("q") || "") }),
@@ -155,7 +157,7 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
       const base = { mode: plan.mode, reasons: plan.reasons, resume, tracks: tracks(i), duration: i.duration };
       if (plan.mode === "direct") return { ...base, url: `/api/file/${i.id}`, start: 0, subtitle: subKey ? `/api/subs/${i.id}/${subKey}.vtt` : null };
       const start = Math.max(0, Math.floor(b.hlsStart ?? resume));
-      const s = await streamer.startHls(item, plan, { start, maxHeight: b.caps?.maxHeight || null, owner: crypto.createHash("sha256").update(token).digest("hex") });
+      const s = await streamer.startHls(item, plan, { start, maxHeight: b.caps?.maxHeight || null, owner: me.token_hash });
       return { ...base, url: `/api/hls/${s.id}/index.m3u8`, session: s.id, start, encoder: s.encoder, subtitle: subKey ? `/api/subs/${i.id}/${subKey}.vtt?from=${start}` : null };
     },
     "POST /api/playing": async (req, res, me, url, token) => {
@@ -316,12 +318,13 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
     }
     if ((m = url.pathname.match(/^\/api\/hls\/([A-Za-z0-9_-]+)\/(index\.m3u8|init\.mp4|s\d{5}\.(?:ts|m4s))$/))) {
       const s = streamer.get(m[1]);
-      if (!s || s.owner !== crypto.createHash("sha256").update(me.token).digest("hex")) throw fail(404, "That playback ended");
+      if (!s || s.owner !== me.token_hash) throw fail(404, "That playback ended");
       const file = await streamer.hlsFile(m[1], m[2]);
       if (!file) throw fail(404, "Not ready");
       if (m[2] === "index.m3u8") {
-        // Segment addresses carry the token too (players fetch them without our headers).
-        const t = encodeURIComponent(me.token);
+        // Segment addresses carry a media-only token (players fetch them without our headers; a
+        // URL must never carry the account token — it would end up in history and caches).
+        const t = encodeURIComponent(auth.mediaToken(me.token_hash));
         const text = fs.readFileSync(file, "utf8").replace(/^(s\d{5}\.(?:ts|m4s))$/gm, `$1?t=${t}`).replace(/URI="init\.mp4"/, `URI="init.mp4?t=${t}"`);
         res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" });
         return res.end(text);
@@ -379,7 +382,9 @@ export function createApi({ db, auth, lib, scanner, streamer, images, reports, w
         return Array.isArray(r) ? json(res, 200, r[0], r[1]) : json(res, 200, r);
       }
       const token = tokenOf(req, url);
-      const me = token && auth.who(token);
+      let me = token && auth.who(token);
+      // Media addresses may also be opened with a media-only token (never account routes).
+      if (!me && token && (req.method === "GET" || req.method === "HEAD") && /^\/api\/(file|hls|subs|img)\//.test(url.pathname)) me = auth.whoMedia(token);
       if (!me) throw fail(401, "Sign in");
       me.token = token;
       // Cookie sign-in (the web app) also needs this header on changes, so other sites can't send them.

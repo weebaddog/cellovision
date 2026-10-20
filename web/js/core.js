@@ -1,6 +1,6 @@
 // Shared bits: building elements, talking to the server, pop-ups, and what this device can play.
 
-export const state = { me: null, server: null, token: null };
+export const state = { me: null, server: null, token: null, mediaToken: null };
 
 // The web app signs in with a cookie; the desktop and phone apps (which load this same app) can
 // pass a token instead (window.CellovisionApp.token()).
@@ -36,10 +36,14 @@ export async function api(method, path, body) {
   return data;
 }
 
-/** A media address (pictures, files, streams) that works without our headers. */
+/**
+ * A media address (pictures, files, streams) that works without our headers. In a browser the
+ * same-origin cookie authorizes it, so nothing goes in the URL. The phone/desktop wrappers sign in
+ * with a token instead, so they put a short-lived media-only token in the URL — never the account one.
+ */
 export function mediaUrl(path) {
-  const t = bearer();
-  if (!t) return path;
+  if (!bearer()) return path;
+  const t = state.mediaToken || bearer();
   return `${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(t)}`;
 }
 export const img = (id, which = "poster", w = 320) => mediaUrl(`/api/img/${id}/${which}?w=${Math.round(w * (window.devicePixelRatio || 1))}`);

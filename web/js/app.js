@@ -1,7 +1,7 @@
 // Cellovision web app: signing in, the frame (top bar, menus), and switching pages.
 // The Windows, Linux and Android apps show this same app.
 
-import { h, api, state, toast, go, applyTheme, setTheme, localGet, act, sheet } from "./core.js";
+import { h, api, state, toast, go, applyTheme, setTheme, localGet, act, sheet, bearer } from "./core.js";
 import { homePage, shelfPage, itemPage, searchPage, heartsPage, setsPage, setPage, mixtapesPage, mixtapePage, pairPage } from "./pages.js";
 import { controlPage } from "./control.js";
 import { enableTv } from "./tv.js";
@@ -19,6 +19,9 @@ async function start() {
   document.title = state.server.name;
   if (!state.server.setUp) return setupPage();
   try { state.me = await api("GET", "/api/me"); } catch { return signInPage(); }
+  // The phone/desktop wrappers (which sign in with a token) get a media-only token for picture and
+  // file URLs, so the account token never travels in a URL. A browser uses its cookie instead.
+  if (bearer()) { try { state.mediaToken = (await api("GET", "/api/media-token")).token; } catch { state.mediaToken = null; } }
   shell();
 }
 window.addEventListener("cv-signed-out", () => { state.me = null; signInPage(); });

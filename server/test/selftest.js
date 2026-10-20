@@ -183,6 +183,12 @@ await test("Fit to Device: direct play with byte ranges", async () => {
   assert.equal(p.mode, "direct");
   const r = await call("GET", `${p.url}?t=${token}`, null, null, { range: "bytes=0-99" });
   assert.equal(r.status, 206); assert.equal(r.body.length, 100); assert.equal(r.headers.get("content-type"), "video/mp4");
+  // A media-only token opens media by URL (so the account token never goes in a URL) but can't touch the account.
+  const mt = (await call("GET", "/api/media-token")).body.token;
+  assert.match(mt, /^m1\./);
+  assert.equal((await call("GET", `${p.url}?t=${encodeURIComponent(mt)}`, null, null, { range: "bytes=0-9" })).status, 206);
+  assert.equal((await call("GET", "/api/me", null, mt)).status, 401);          // not as a Bearer on an account route
+  assert.equal((await call("GET", `/api/me?t=${encodeURIComponent(mt)}`, null, null)).status, 401); // nor in the URL
 });
 async function hlsFirstSegment(p) {
   const pl = await call("GET", p.url, null, null);

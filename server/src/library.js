@@ -127,8 +127,8 @@ export function createLibrary(db) {
       if (q.genre) { where.push("i.genres LIKE ?"); params.push(`%"${q.genre.replace(/["%_]/g, "")}"%`); }
       if (q.year) { where.push("i.year = ?"); params.push(+q.year); }
       if (q.letter) { where.push("i.sort_title LIKE ?"); params.push(`${q.letter.toLowerCase().slice(0, 1)}%`); }
-      if (q.heart === "1") where.push(`EXISTS (SELECT 1 FROM marks m WHERE m.profile_id = '${profile.id.replace(/'/g, "")}' AND m.item_id = i.id AND m.heart = 1)`);
-      if (q.played === "0") where.push(`NOT EXISTS (SELECT 1 FROM marks m WHERE m.profile_id = '${profile.id.replace(/'/g, "")}' AND m.item_id = i.id AND m.played = 1)`);
+      if (q.heart === "1") { where.push("EXISTS (SELECT 1 FROM marks m WHERE m.profile_id = ? AND m.item_id = i.id AND m.heart = 1)"); params.push(profile.id); }
+      if (q.played === "0") { where.push("NOT EXISTS (SELECT 1 FROM marks m WHERE m.profile_id = ? AND m.item_id = i.id AND m.played = 1)"); params.push(profile.id); }
       const order = { added: "i.added DESC", year: "i.year DESC, i.sort_title", score: "i.score DESC NULLS LAST", title: "i.sort_title", taken: "i.sort_title DESC" }[q.sort]
         || (shelf.kind === "photos" ? "i.kind = 'folder' DESC, i.sort_title DESC" : shelf.kind === "videos" ? "i.kind = 'folder' DESC, i.sort_title" : "i.sort_title");
       const limit = Math.min(500, +q.limit || 200), offset = +q.offset || 0;
