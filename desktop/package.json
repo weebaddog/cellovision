@@ -5,6 +5,8 @@
   "description": "Cellovision for Windows and Linux: watch from your server, or be the server",
   "author": "Cellovision <90303180+weebaddog@users.noreply.github.com>",
   "license": "MIT",
+  "homepage": "https://github.com/weebaddog/cellovision",
+  "desktopName": "cellovision.desktop",
   "main": "main.js",
   "private": true,
   "scripts": {
