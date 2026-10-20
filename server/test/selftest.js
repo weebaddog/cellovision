@@ -339,6 +339,9 @@ await test("problem reports: from any app (even signed out), repeats counted, pe
   assert.equal(list.reports.length, 1); assert.equal(list.reports[0].count, 2);
   assert.equal(list.mail.hasPass, false);
   srv.db.setSetting("mail", SMTP); // (the Control Room saves the same, without `secure`)
+  const raw = srv.db.get("SELECT value FROM settings WHERE key = 'mail'").value;
+  assert.match(raw, /^enc:v1:/, "secrets are stored encrypted"); assert.equal(raw.includes("app pass"), false);
+  assert.equal(srv.db.setting("mail").pass, "app pass");
   const before = mails.length;
   await call("POST", "/api/report", { source: "android", kind: "user", message: "The TV stops after 10 minutes", device: "Android TV" });
   for (let i = 0; i < 30 && mails.length === before; i++) await new Promise((r) => setTimeout(r, 100));

@@ -10,3 +10,4 @@ android/keystore.properties
 *.jks
 *.keystore
 init.mp4
+desktop/dist-linux/

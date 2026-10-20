@@ -4,6 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
+import { loadKey, createSealer } from "./secrets.js";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
@@ -42,8 +43,12 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, profile_id TEXT, kind TEXT NOT NULL, text TEXT NOT NULL)`,
 ];
 
+// Settings that hold secrets: stored encrypted (secrets.js), never as plain text.
+const SECRET_SETTINGS = new Set(["mail", "tmdbKey"]);
+
 export function openDb(dir) {
   fs.mkdirSync(dir, { recursive: true });
+  const sealer = createSealer(loadKey(dir));
   const db = new DatabaseSync(path.join(dir, "cellovision.db"));
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   for (const s of SCHEMA) db.exec(s);
@@ -62,10 +67,11 @@ export function openDb(dir) {
     },
     setting(key, fallback = null) {
       const r = stmt("SELECT value FROM settings WHERE key = ?").get(key);
-      return r ? JSON.parse(r.value) : fallback;
+      return r ? JSON.parse(sealer.open(r.value)) : fallback;
     },
     setSetting(key, value) {
-      stmt("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
+      const text = JSON.stringify(value);
+      stmt("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, SECRET_SETTINGS.has(key) && value !== null ? sealer.seal(text) : text);
     },
     log(kind, text, profileId = null) {
       stmt("INSERT INTO activity (at, profile_id, kind, text) VALUES (?, ?, ?, ?)").run(Date.now(), profileId, kind, text);
@@ -73,5 +79,10 @@ export function openDb(dir) {
     },
     close: () => db.close(),
   };
+  // Secrets saved before encryption existed: encrypt them now.
+  for (const k of SECRET_SETTINGS) {
+    const r = stmt("SELECT value FROM settings WHERE key = ?").get(k);
+    if (r && !sealer.isSealed(r.value) && r.value !== "null") api.setSetting(k, JSON.parse(r.value));
+  }
   return api;
 }

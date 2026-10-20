@@ -29,6 +29,26 @@ app.on("second-instance", () => show());
 
 // ---- the server on this computer -------------------------------------------------------------
 
+/**
+ * The key the server encrypts its secrets with (mail App Password, TMDB key), kept locked by the
+ * operating system (Windows DPAPI / the Linux keyring, through safeStorage) instead of a plain file.
+ */
+function serverKey() {
+  const { safeStorage } = require("electron");
+  if (!safeStorage.isEncryptionAvailable()) return null; // (the server then keeps its own key file)
+  const file = path.join(app.getPath("userData"), "server-key.bin");
+  try { return safeStorage.decryptString(fs.readFileSync(file)); } catch { /* first time */ }
+  // A server that ran before kept its key in a plain file: move that key in here.
+  const dataDir = process.env.CELLOVISION_DATA || (process.platform === "win32" ? path.join(process.env.LOCALAPPDATA || os.homedir(), "Cellovision") : path.join(os.homedir(), ".local", "share", "cellovision"));
+  const old = path.join(dataDir, "secret.key");
+  let key = null;
+  try { key = fs.readFileSync(old, "utf8").trim(); } catch { key = require("node:crypto").randomBytes(32).toString("base64"); }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, safeStorage.encryptString(key));
+  fs.rmSync(old, { force: true });
+  return key;
+}
+
 // Packaged: the server and the web app are in resources/. From source: the project's folders.
 const serverMain = () => app.isPackaged ? path.join(process.resourcesPath, "server", "src", "main.js") : path.join(__dirname, "..", "server", "src", "main.js");
 
@@ -46,7 +66,7 @@ async function startServer() {
   const logFile = path.join(app.getPath("userData"), "server.log");
   const log = fs.createWriteStream(logFile, { flags: "a" });
   server = spawn(process.execPath, [serverMain()], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CELLOVISION_FFMPEG: ff, CELLOVISION_PORT: String(PORT) },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", CELLOVISION_FFMPEG: ff, CELLOVISION_PORT: String(PORT), ...(serverKey() ? { CELLOVISION_SECRET_KEY: serverKey() } : {}) },
     stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
   server.stdout.pipe(log); server.stderr.pipe(log);
