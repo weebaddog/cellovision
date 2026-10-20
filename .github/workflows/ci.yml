@@ -1,0 +1,49 @@
+name: cellovision
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  server:
+    # The server's self-test on Linux, with real sample media made by FFmpeg.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -hide_banner -version | head -1
+      - name: Self-test
+        working-directory: server
+        run: node test/selftest.js
+
+  desktop-linux:
+    # The Linux app: AppImage (any distro) and .deb (Debian/Ubuntu/Mint), with the server inside.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build
+        working-directory: desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npx electron-builder --linux AppImage deb --publish never
+          ls -la dist
+      - name: The .deb installs, and the server inside it starts with the app's own Node
+        run: |
+          sudo apt-get install -y -qq ./desktop/dist/*.deb ffmpeg >/dev/null
+          test -x /opt/Cellovision/cellovision
+          export CELLOVISION_DATA=$(mktemp -d) CELLOVISION_PORT=8430 ELECTRON_RUN_AS_NODE=1
+          /opt/Cellovision/cellovision /opt/Cellovision/resources/server/src/main.js &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8430/api/hello && break; sleep 1; done
+          curl -sf http://127.0.0.1:8430/api/hello | grep -q '"setUp":false'
+          curl -sf http://127.0.0.1:8430/ | grep -q Cellovision
+          kill %1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cellovision-linux
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb

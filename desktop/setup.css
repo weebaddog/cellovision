@@ -1,0 +1,28 @@
+:root { --bg: #0b0b10; --card: #15151d; --ink: #f3f2f8; --muted: #a3a1b6; --line: #2a2a38; --accent: #8b6cff; --bad: #ff7b7b; color-scheme: dark; }
+@media (prefers-color-scheme: light) { :root { --bg: #f5f4fa; --card: #fff; --ink: #17151f; --muted: #5d5a6e; --line: #e2e0ec; --accent: #6a49f2; --bad: #c62828; color-scheme: light; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 640px; margin: 6vh auto; padding: 0 18px; text-align: center; }
+h1 { margin: 8px 0 14px; font-size: 1.8rem; }
+h2 { font-size: 1.1rem; margin: 0 0 4px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin: 14px 0; text-align: left; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--bad); min-height: 1.2em; margin: 4px 0; }
+code { background: var(--line); padding: 1px 5px; border-radius: 5px; }
+form { display: flex; gap: 8px; margin-top: 10px; }
+input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+button { font: inherit; font-weight: 700; border-radius: 999px; padding: 9px 16px; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+button[type=submit], button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .55; cursor: progress; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+.found { display: grid; gap: 8px; margin-top: 10px; }
+.server { display: flex; flex-direction: column; align-items: flex-start; border-radius: 12px; text-align: left; }
+.server span { font-weight: 400; color: var(--muted); font-size: 13px; }
+.meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 10px; }
+.meter i { display: block; height: 100%; width: 0; background: var(--accent); }
+.hidden { display: none; }
+.theme { display: flex; justify-content: center; gap: 6px; margin-top: 18px; }
+.theme button { font-size: 13px; padding: 5px 12px; }
+.theme button.on { background: var(--accent); border-color: var(--accent); color: #fff; }

@@ -1,0 +1,34 @@
+{
+  "name": "cellovision-desktop",
+  "productName": "Cellovision",
+  "version": "0.1.0",
+  "description": "Cellovision for Windows and Linux: watch from your server, or be the server",
+  "author": "Cellovision <90303180+weebaddog@users.noreply.github.com>",
+  "license": "MIT",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage deb"
+  },
+  "devDependencies": {
+    "electron": "44.9.1",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.cellovision.desktop",
+    "productName": "Cellovision",
+    "files": ["main.js", "preload.js", "ffmpeg-get.js", "setup.html", "setup.js", "setup.css", "icon.png"],
+    "extraResources": [
+      { "from": "../server/src", "to": "server/src" },
+      { "from": "../server/package.json", "to": "server/package.json" },
+      { "from": "../web", "to": "web" }
+    ],
+    "directories": { "output": "dist" },
+    "win": { "target": "nsis", "icon": "icon.png" },
+    "nsis": { "oneClick": true, "perMachine": false, "artifactName": "Cellovision-Setup.exe", "shortcutName": "Cellovision", "createDesktopShortcut": "always" },
+    "linux": { "icon": "icon.png", "category": "AudioVideo", "executableName": "cellovision", "artifactName": "Cellovision-${version}-${arch}.${ext}",
+      "maintainer": "Cellovision <90303180+weebaddog@users.noreply.github.com>", "synopsis": "Your own movies, shows, music and photos" }
+  }
+}

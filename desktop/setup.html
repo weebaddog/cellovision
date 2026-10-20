@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <title>Cellovision</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main>
+    <img src="icon.png" alt="" width="84" height="84">
+    <h1>Cellovision</h1>
+    <p id="error" class="error" role="alert"></p>
+    <p id="status" class="muted" role="status"></p>
+
+    <section class="card">
+      <h2>Watch from a Cellovision server</h2>
+      <p class="muted">On the same Wi-Fi as the server? Find it, or type its address (like <code>192.168.1.20</code>).</p>
+      <form id="form">
+        <input id="address" type="text" placeholder="192.168.1.20" autocomplete="off" spellcheck="false">
+        <button type="submit" id="connect">Connect</button>
+      </form>
+      <div class="row"><button type="button" id="find" class="ghost">Find servers</button></div>
+      <div id="found" class="found"></div>
+    </section>
+
+    <section class="card">
+      <h2>Make this computer the server</h2>
+      <p class="muted">Your movies, shows, music and photos are on this computer? Run the server here: every phone, TV and computer at home can watch from it. It starts when you sign in and keeps running in the tray.</p>
+      <p class="muted small">The first time, Cellovision downloads FFmpeg (about 100 MB, open source) to convert videos for devices that can't play them. If Windows asks whether to let Cellovision use the network, choose Allow (private networks).</p>
+      <div class="row"><button type="button" id="server" class="primary">Run the server here</button></div>
+      <div id="progress" class="meter hidden"><i></i></div>
+    </section>
+
+    <div class="theme" role="radiogroup" aria-label="Theme">
+      <button type="button" data-theme="dark">Dark</button><button type="button" data-theme="light">Light</button><button type="button" data-theme="auto">Auto</button>
+    </div>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>
